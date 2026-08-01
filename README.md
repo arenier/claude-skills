@@ -12,7 +12,7 @@ exécute au lieu de réinventer les commandes.
 
 ```bash
 git clone https://github.com/arenier/claude-skills.git
-ln -s "$PWD/claude-skills/deploy-actual-gcp" ~/.claude/skills/deploy-actual-gcp
+for s in claude-skills/*/; do ln -s "$PWD/$s" ~/.claude/skills/"$(basename "$s")"; done
 ```
 
 Un lien symbolique plutôt qu'une copie : les modifications faites dans le repo
@@ -49,6 +49,28 @@ Ce qu'il encode et qui ne se devine pas :
 Il s'appuie sur le travail de [daniefdz/actual-run](https://github.com/daniefdz/actual-run),
 dont il reprend l'approche ; les corrections de propagation IAM ont été
 reversées en amont.
+
+### `backup-actual-gcp`
+
+Sauvegarde quotidienne d'une instance Actual vers un bucket d'un projet dédié,
+par Cloud Run Job et Cloud Scheduler.
+
+La sauvegarde est **physique** — une copie du bucket — et non un export via
+l'API d'Actual. C'est un choix, pas un raccourci : l'export logique réclame le
+mot de passe du serveur, qui appartient à la personne pour qui tu héberges. La
+copie de bucket n'utilise que l'accès GCP que tu as déjà.
+
+Ce qu'il encode :
+
+* **Aucun droit de suppression, nulle part.** Le service account lit la source
+  et écrit la destination, sans jamais pouvoir effacer. Le versioning transforme
+  les écrasements en archivage. Une compromission du job ne détruit pas
+  l'historique.
+* **`bucketViewer` en plus de `objectViewer`** sur les deux buckets : `rsync`
+  lit les métadonnées du bucket avant de lister, et `objectViewer` ne porte pas
+  `storage.buckets.get`.
+* **Les jobs vivent dans le projet de sauvegarde**, jamais dans les projets
+  sources — qui n'ont donc aucune prise sur leurs propres copies.
 
 ## Licence
 
