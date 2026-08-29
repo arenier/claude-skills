@@ -72,6 +72,37 @@ Ce qu'il encode :
 * **Les jobs vivent dans le projet de sauvegarde**, jamais dans les projets
   sources — qui n'ont donc aucune prise sur leurs propres copies.
 
+### `deploy-freshrss-gcp`
+
+Déploie [FreshRSS](https://freshrss.org/) sur Cloud Run, données sur un bucket
+monté en gcsfuse, flux actualisés par Cloud Scheduler.
+
+Ce qu'il encode et qui ne se devine pas :
+
+* **Le cron intégré ne sert à rien.** `CRON_MIN` installe un crontab *dans le
+  conteneur* : il ne se déclenche que si le conteneur est éveillé, ce qui
+  n'arrive jamais en `min-instances=0`. L'actualisation vient donc de
+  l'extérieur, par un job planifié.
+* **Le jeton d'actualisation ne passe pas dans l'URL du planificateur.** Une
+  cible Cloud Scheduler est lisible avec un simple rôle de lecture et finit dans
+  les journaux à chaque exécution — et ce jeton ne se contente pas de déclencher
+  une actualisation : il donne aussi accès à la sortie RSS et à l'export OPML.
+  Il reste dans Secret Manager, lu à l'exécution.
+* **L'installation se fait depuis la spec**, par `FRESHRSS_INSTALL` et
+  `FRESHRSS_USER`. Une instance publique et non installée laisse n'importe quel
+  visiteur dérouler l'installateur web et s'approprier l'instance ; installer au
+  premier démarrage ferme la fenêtre avant le premier octet de trafic.
+* **Les secrets ne sont pas dans la spec.** Les variables y contiennent les
+  chaînes littérales `$ADMIN_PASSWORD` et `$REFRESH_TOKEN` ; l'entrypoint les
+  développe dans le conteneur à partir de ce que Secret Manager y injecte. En
+  contrepartie les valeurs doivent rester alphanumériques : elles traversent un
+  `eval`.
+* **`--max-instances=1`**, pour la même raison que sur Actual : FreshRSS utilise
+  SQLite, et SQLite sur gcsfuse ne supporte pas deux écrivains concurrents.
+* **`base_url` doit être connue avant le premier démarrage**, puisque FreshRSS
+  la fige à l'installation. L'URL Cloud Run en numéro de projet est
+  déterministe, donc calculable d'avance.
+
 ## Licence
 
 MIT
