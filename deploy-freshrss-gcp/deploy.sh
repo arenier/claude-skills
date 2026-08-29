@@ -14,8 +14,13 @@ PROJECT_ID="${1:-${PROJECT_ID:-}}"
 REGION="${REGION:-europe-west9}"
 # Defaults to your first open billing account. Set it explicitly if you have
 # more than one, or the wrong one will get charged.
+#
+# The `|| true` is load-bearing. Not being able to list billing accounts is a
+# normal outcome -- the Cloud Billing API may be off, or the identity may have
+# no billing permissions -- but under `set -e` the failing substitution aborts
+# the whole script, and `2>/dev/null` means it does so with no output at all.
 BILLING_ACCOUNT="${BILLING_ACCOUNT:-$(gcloud billing accounts list \
-  --filter='open=true' --format='value(name)' --limit=1 2>/dev/null)}"
+  --filter='open=true' --format='value(name)' --limit=1 2>/dev/null || true)}"
 FRESHRSS_VERSION="${FRESHRSS_VERSION:-}"
 ADMIN_USER="${ADMIN_USER:-admin}"
 LANGUAGE="${LANGUAGE:-fr}"
@@ -33,6 +38,8 @@ PW_SECRET="freshrss-admin-password"
 TOKEN_SECRET="freshrss-refresh-token"
 # Small, purpose-built image: the refresh job runs hourly and is billed for the
 # time it takes to start, so a 1 GB toolbox image would cost real money here.
+# (The 512Mi floor below is not ours to choose: Cloud Run Jobs run gen2 with CPU
+# always allocated, which refuses anything smaller.)
 CURL_IMAGE="curlimages/curl:8.11.1"
 BUDGET_NAME="Budget ${PROJECT_ID}"
 
@@ -51,15 +58,33 @@ fi
 PROJECT_EXISTS=false
 gcloud projects describe "$PROJECT_ID" >/dev/null 2>&1 && PROJECT_EXISTS=true
 
-PROJECT_BILLED=false
-if [[ "$PROJECT_EXISTS" == true ]] && gcloud billing projects describe "$PROJECT_ID" \
-     --format='value(billingEnabled)' 2>/dev/null | grep -qi true; then
-  PROJECT_BILLED=true
+# Billing state is only knowable when the Cloud Billing API is enabled on the
+# project AND the identity may read it. Neither holds for a deployment service
+# account by default, so treat "unknown" as its own state: conflating it with
+# "not billed" would block a deployment on an existing, obviously-billed
+# project -- one already running services -- over information it never needs.
+BILLING_STATE=unknown
+if [[ "$PROJECT_EXISTS" == true ]]; then
+  if billing_out="$(gcloud billing projects describe "$PROJECT_ID" \
+       --format='value(billingEnabled)' 2>/dev/null)"; then
+    if grep -qi true <<<"$billing_out"; then
+      BILLING_STATE=billed
+    else
+      BILLING_STATE=unbilled
+    fi
+  fi
 fi
 
-if [[ -z "$BILLING_ACCOUNT" && "$PROJECT_BILLED" != true ]]; then
-  echo "error: no open billing account found, and ${PROJECT_ID} is not billed." >&2
+# Only creating the project genuinely requires a billing account.
+if [[ "$PROJECT_EXISTS" != true && -z "$BILLING_ACCOUNT" ]]; then
+  echo "error: ${PROJECT_ID} does not exist and no billing account is known." >&2
   echo "  gcloud billing accounts list" >&2
+  echo "  BILLING_ACCOUNT=XXXXXX-XXXXXX-XXXXXX $0 $PROJECT_ID" >&2
+  exit 1
+fi
+
+if [[ "$BILLING_STATE" == unbilled && -z "$BILLING_ACCOUNT" ]]; then
+  echo "error: ${PROJECT_ID} exists but has no billing account linked." >&2
   echo "  BILLING_ACCOUNT=XXXXXX-XXXXXX-XXXXXX $0 $PROJECT_ID" >&2
   exit 1
 fi
@@ -72,8 +97,11 @@ if [[ "$ADMIN_USER" == *[[:space:]]* ]]; then
 fi
 
 if [[ -z "$FRESHRSS_VERSION" ]]; then
-  FRESHRSS_VERSION="$(curl -fsSL https://api.github.com/repos/FreshRSS/FreshRSS/releases/latest \
-    | sed -n 's/.*"tag_name": *"v\{0,1\}\([^"]*\)".*/\1/p' | head -1)"
+  # Same trap as above: an unreachable or rate-limited GitHub API makes this
+  # pipeline fail, and under `set -o pipefail` that would abort the script
+  # instead of reaching the actionable error message below.
+  FRESHRSS_VERSION="$(curl -fsSL https://api.github.com/repos/FreshRSS/FreshRSS/releases/latest 2>/dev/null \
+    | sed -n 's/.*"tag_name": *"v\{0,1\}\([^"]*\)".*/\1/p' | head -1 || true)"
   if [[ -z "$FRESHRSS_VERSION" ]]; then
     echo "error: could not resolve the latest FreshRSS version." >&2
     echo "  set it explicitly: FRESHRSS_VERSION=1.29.0 $0 $PROJECT_ID" >&2
@@ -94,7 +122,7 @@ if [[ "$PROJECT_EXISTS" != true ]]; then
   gcloud projects create "$PROJECT_ID"
 fi
 
-if [[ "$PROJECT_BILLED" != true ]]; then
+if [[ "$BILLING_STATE" == unbilled ]]; then
   echo "Linking billing account ${BILLING_ACCOUNT}..."
   gcloud billing projects link "$PROJECT_ID" --billing-account="$BILLING_ACCOUNT"
 fi
@@ -302,7 +330,7 @@ gcloud run jobs "$JOB_VERB" "$JOB_NAME" \
   --set-secrets="REFRESH_TOKEN=${TOKEN_SECRET}:latest" \
   --max-retries=1 \
   --task-timeout=900s \
-  --memory=256Mi \
+  --memory=512Mi \
   --command=sh \
   --args='^|^-c|curl -fsS --max-time 840 -G "$BASE_URL/i/" --data-urlencode c=feed --data-urlencode a=actualize --data-urlencode user="$FRESHRSS_USER_NAME" --data-urlencode token="$REFRESH_TOKEN" -o /dev/null' \
   --region="$REGION" \
