@@ -43,8 +43,22 @@ if [[ -z "$PROJECT_ID" ]]; then
   exit 1
 fi
 
-if [[ -z "$BILLING_ACCOUNT" ]]; then
-  echo "error: no open billing account found." >&2
+# Not knowing the billing account is only fatal when the project still has to
+# be created or linked. On an already-billed project it costs the budget alert
+# and nothing else -- which matters when running under a service account that
+# deliberately has no billing permissions, where `billing accounts list`
+# returns empty rather than failing.
+PROJECT_EXISTS=false
+gcloud projects describe "$PROJECT_ID" >/dev/null 2>&1 && PROJECT_EXISTS=true
+
+PROJECT_BILLED=false
+if [[ "$PROJECT_EXISTS" == true ]] && gcloud billing projects describe "$PROJECT_ID" \
+     --format='value(billingEnabled)' 2>/dev/null | grep -qi true; then
+  PROJECT_BILLED=true
+fi
+
+if [[ -z "$BILLING_ACCOUNT" && "$PROJECT_BILLED" != true ]]; then
+  echo "error: no open billing account found, and ${PROJECT_ID} is not billed." >&2
   echo "  gcloud billing accounts list" >&2
   echo "  BILLING_ACCOUNT=XXXXXX-XXXXXX-XXXXXX $0 $PROJECT_ID" >&2
   exit 1
@@ -75,13 +89,12 @@ echo ""
 
 # --- Project -----------------------------------------------------------------
 
-if ! gcloud projects describe "$PROJECT_ID" >/dev/null 2>&1; then
+if [[ "$PROJECT_EXISTS" != true ]]; then
   echo "Creating project ${PROJECT_ID}..."
   gcloud projects create "$PROJECT_ID"
 fi
 
-if ! gcloud billing projects describe "$PROJECT_ID" \
-     --format='value(billingEnabled)' 2>/dev/null | grep -qi true; then
+if [[ "$PROJECT_BILLED" != true ]]; then
   echo "Linking billing account ${BILLING_ACCOUNT}..."
   gcloud billing projects link "$PROJECT_ID" --billing-account="$BILLING_ACCOUNT"
 fi
@@ -356,9 +369,13 @@ create_budget() {
   echo "Budget alert created at ${BUDGET_AMOUNT} EUR/month."
 }
 
-if ! create_budget; then
+if [[ -z "$BILLING_ACCOUNT" ]]; then
+  echo "note: no billing account known, skipping the budget alert. Create it" >&2
+  echo "  later with BILLING_ACCOUNT=XXXXXX-XXXXXX-XXXXXX $0 $PROJECT_ID" >&2
+elif ! create_budget; then
   echo "warning: could not create the budget alert (the API may still be" >&2
-  echo "  activating). Retry later, or create it in the console." >&2
+  echo "  activating, or this identity has no billing permissions). Retry" >&2
+  echo "  later, or create it in the console." >&2
 fi
 
 # --- Done --------------------------------------------------------------------
