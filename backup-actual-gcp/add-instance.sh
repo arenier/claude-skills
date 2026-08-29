@@ -127,10 +127,20 @@ for role in roles/storage.objectViewer roles/storage.bucketViewer; do
     --project="$SOURCE_PROJECT"
 done
 
-# On the destination: read (rsync compares before copying) and create, but
-# deliberately NOT delete. A compromised job can add backups, never destroy the
-# history. Overwrites still work: with versioning on, they archive.
-for role in roles/storage.objectViewer roles/storage.bucketViewer roles/storage.objectCreator; do
+# On the destination: objectAdmin, which includes delete.
+#
+# This used to be objectCreator, on the assumption that create-without-delete
+# still allowed overwrites because versioning turns them into archiving. That
+# assumption is wrong, and it silently broke the backups: overwriting an
+# existing GCS object requires storage.objects.delete regardless of versioning.
+# The job would copy new files happily and fail with 403 on every file that had
+# changed since it was first copied -- so a budget was backed up once and never
+# refreshed, while the job kept reporting the same failure nobody watched.
+#
+# What objectCreator was protecting against is already covered by the bucket
+# itself: versioning archives every overwrite, and the soft delete policy makes
+# even a deliberate purge recoverable for seven days.
+for role in roles/storage.objectViewer roles/storage.bucketViewer roles/storage.objectAdmin; do
   grant_with_retry gcloud storage buckets add-iam-policy-binding "gs://${DEST_BUCKET}" \
     --member="serviceAccount:${SA_EMAIL}" --role="$role" \
     --project="$BACKUP_PROJECT"
@@ -139,6 +149,12 @@ done
 # --- Cloud Run Job ------------------------------------------------------------
 # No --delete-unmatched-destination-objects: a file removed from the source
 # stays in the backup. That is the point of a backup.
+#
+# --checksums-only compares object hashes instead of modification times. The
+# source is written by gcsfuse, which records its own gcsfuse_mtime rather than
+# the goog-reserved-file-mtime that rsync reads, so mtime comparison rests on
+# metadata that is not reliably there. Hashes are already in GCS metadata, so
+# this costs no transfer.
 JOB_VERB=create
 gcloud run jobs describe "$JOB_NAME" --region="$REGION" \
   --project="$BACKUP_PROJECT" >/dev/null 2>&1 && JOB_VERB=update
@@ -146,7 +162,7 @@ gcloud run jobs describe "$JOB_NAME" --region="$REGION" \
 gcloud run jobs "$JOB_VERB" "$JOB_NAME" \
   --image="$IMAGE" \
   --command=gcloud \
-  --args="storage,rsync,--recursive,gs://${SOURCE_BUCKET},gs://${DEST_BUCKET}" \
+  --args="storage,rsync,--recursive,--checksums-only,gs://${SOURCE_BUCKET},gs://${DEST_BUCKET}" \
   --service-account="$SA_EMAIL" \
   --max-retries=2 \
   --task-timeout=900s \
