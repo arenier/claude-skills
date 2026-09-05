@@ -1,0 +1,18 @@
+{
+  "name": "adri-skills",
+  "owner": {
+    "name": "arenier",
+    "url": "https://github.com/arenier"
+  },
+  "description": "Marketplace de skills Claude Code.",
+  "plugins": [
+    {
+      "name": "adri-plugin",
+      "source": "./adri-plugin",
+      "description": "Cycle de vie d'une pull request : ouvrir (create-pr), relire (pr-review), traiter la review (pr-review-triage).",
+      "license": "MIT",
+      "keywords": ["pull-request", "review", "git", "github"],
+      "category": "workflow"
+    }
+  ]
+}
