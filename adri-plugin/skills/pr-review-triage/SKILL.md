@@ -168,8 +168,8 @@ dis-le, avance.
 avant qu'une ligne ne soit écrite — pas après.
 
 Structure du commentaire — le tableau récapitulatif reste **visible** (verdicts d'un coup d'œil) ; le
-détail point par point est **replié** dans `<details>`. Marqueur `<!-- pr-review-triage -->` en tête
-pour la rejouabilité :
+détail est **replié par point** dans un `<details>` chacun. Marqueur `<!-- pr-review-triage -->` en
+tête pour la rejouabilité :
 
 ```markdown
 <!-- pr-review-triage -->
@@ -181,12 +181,19 @@ pour la rejouabilité :
 | 🟡 <point, court> | Fondé | 📌 Reporté |
 | 💬 <question> | Constat | ⛔ Écarté (raison) |
 
-<details open>
-<summary><b>Vérifications point par point (N)</b></summary>
+**Vérifications point par point (N)**
 
-### 1. <Point> — <reproduit | infirmé>
+<details open>
+<summary><b>1. 🟠 <Point> — <reproduit | infirmé></b></summary>
 
 [La preuve : sortie du repro, extrait de config, citation de code. Ce qui est observé, pas supposé.]
+
+</details>
+
+<details>
+<summary><b>2. 🟡 <Point> — <reproduit | infirmé></b></summary>
+
+[La preuve.]
 
 </details>
 
@@ -200,13 +207,16 @@ pour la rejouabilité :
 </details>
 ```
 
-Deux règles pour que les `<details>` rendent sur GitHub :
+Trois règles pour que les `<details>` rendent sur GitHub :
 
 - **Une ligne vide après `</summary>` est obligatoire** — sans elle, le markdown intérieur (tableau,
   titres, liste) n'est pas rendu.
-- Garder l'attribut **`open`** sur « Vérifications point par point » **seulement quand il porte un 🔴
-  ou 🟠**. Le retirer (`<details>`) quand tout est 🟡/💬. Omettre un `<details>` dont le contenu
-  serait vide.
+- **Un point par `<details>`**, avec sa sévérité dans le `<summary>`. Chacun porte **`open` seulement
+  quand il est 🔴 ou 🟠** (ce qui a un enjeu s'ouvre d'entrée) ; 🟡 et 💬 restent repliés (`<details>`
+  sans `open`). Le tableau reste l'index visible qui dit d'un coup d'œil ce que chaque point est
+  devenu.
+- Omettre un `<details>` dont le contenu serait vide (dont « Point non relevé · Ce qui reste ouvert »
+  quand il n'y a rien à y mettre).
 
 Poster via un fichier du scratchpad, et **garder l'id du commentaire** :
 

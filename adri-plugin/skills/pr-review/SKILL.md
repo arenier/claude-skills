@@ -129,31 +129,53 @@ Puis, dans une fence ` ```markdown ` :
 
 <Si la CI n'est pas verte : « CI <rouge sur `<job>` / en attente> — hors verdict. »>
 
-### 🔴 Bloquants
+<details open>
+<summary><b>🔴 Bloquants (N)</b></summary>
 
 - **<titre>** (`path:line`) — <ce qui casse> → <correctif>
 
-### 🟠 À corriger
+</details>
+
+<details open>
+<summary><b>🟠 À corriger (N)</b></summary>
 
 - **<titre>** (`path:line`) — <ce qui casse> → <correctif>
 
-### 🟡 Suggestions
+</details>
+
+<details>
+<summary><b>🟡 Suggestions (N)</b></summary>
 
 - <titre> (`path:line`) — <recommandation>
 
-### 💬 Questions
+</details>
+
+<details>
+<summary><b>💬 Questions (N)</b></summary>
 
 - <question>
 
-### ✍️ Style & altitude
+</details>
+
+<details>
+<summary><b>✍️ Style & altitude</b></summary>
 
 - <remarques de lisibilité agrégées, ou « rien à signaler »>
+
+</details>
 
 _Relecture statique : lecture de code + CI (read-only). Ni lint, ni test, ni build lancés — un 🟢 veut dire « rien trouvé en lecture », pas « ça compile »._
 ```
 
-Le marqueur `<!-- pr-review -->` en tête rend l'opération rejouable (étape 7). Les sections de
-constats vides s'omettent, sauf `✍️ Style & altitude`.
+Le marqueur `<!-- pr-review -->` en tête rend l'opération rejouable (étape 7). Chaque catégorie de
+constats est un `<details>` repliable — le verdict et les **Réserves** restent lisibles sans dérouler.
+Trois règles pour que ça rende sur GitHub :
+
+- **Une ligne vide après `</summary>` est obligatoire**, sinon la liste intérieure n'est pas rendue.
+- **`🔴 Bloquants` et `🟠 À corriger` portent `open`** (ce qui bloque doit être visible d'entrée) ;
+  `🟡`, `💬` et `✍️` restent repliés (`<details>` sans `open`).
+- Les catégories vides s'omettent, **sauf `✍️ Style & altitude`** (toujours présente, repliée). Le
+  compteur `(N)` dans le `<summary>` donne le volume sans dérouler.
 
 ## Process
 
