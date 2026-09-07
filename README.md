@@ -67,6 +67,19 @@ repo, `create-pr` en applique les conventions de branche et de PR.
 | `pr-review` | Relit une PR en la confrontant aux ADR et conventions ; produit une fiche de review et un commentaire prêt à coller. Consultatif : ne merge ni ne pousse. |
 | `pr-review-triage` | Traite une review déjà postée : vérifie chaque point contre le code, attribue un double verdict, applique les correctifs retenus avec test de non-régression, répond en commentaire. |
 
+## `grill-me` / `grilling`
+
+Interview relentless pour éprouver un plan ou une décision, avant de coder. Importé
+depuis [mattpocock/skills](https://github.com/mattpocock/skills/tree/main/skills/productivity/grill-me)
+(MIT) plutôt que référencé via sa marketplace : celle-ci ne publie qu'un plugin
+unique regroupant tous les skills du repo source, sans moyen d'en installer un
+seul isolément.
+
+`grill-me` est le point d'entrée explicite (`disable-model-invocation`, ne se
+déclenche jamais tout seul) ; il délègue à `grilling`, qui porte le vrai
+comportement et peut aussi se déclencher de lui-même sur les tournures « grill »
+(« grille-moi ce plan », etc.).
+
 ## Skills de déploiement
 
 ### `deploy-actual-gcp`
