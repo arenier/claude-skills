@@ -13,6 +13,14 @@
       "license": "MIT",
       "keywords": ["pull-request", "review", "git", "github"],
       "category": "workflow"
+    },
+    {
+      "name": "documentation-plugin",
+      "source": "./documentation-plugin",
+      "description": "Documentation selon la méthodologie Diataxis : créer (create), restructurer vers un format (restructure), modifier un élément sans y introduire de justification (edit).",
+      "license": "MIT",
+      "keywords": ["documentation", "diataxis", "writing"],
+      "category": "documentation"
     }
   ]
 }
