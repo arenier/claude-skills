@@ -21,10 +21,18 @@ document restructuré.
 
 Si l'utilisateur a nommé le format cible sans ambiguïté, passer à l'étape 3.
 
-Sinon, appeler le skill `grilling`. Le design tree part du choix du quadrant cible ; en dépendent les
-questions sur ce qui, dans le contenu lu à l'étape 1, ne correspond à aucun des critères du format
-choisi et doit donc être coupé, déplacé vers un document séparé, ou signalé comme manquant. Ne pas
-choisir le format à la place de l'utilisateur.
+Sinon, une interview `grilling` est nécessaire — mais **demander d'abord à l'utilisateur s'il veut
+s'y prêter**, en une question simple, hors formalisme design tree : « Pour choisir le format cible,
+je peux t'interviewer par rounds de questions (`grilling`) — tu préfères ça, ou que je te demande
+directement lequel des quatre formats viser ? »
+
+- **Oui** → appeler le skill `grilling`. Le design tree part du choix du quadrant cible ; en
+  dépendent les questions sur ce qui, dans le contenu lu à l'étape 1, ne correspond à aucun des
+  critères du format choisi et doit donc être coupé, déplacé vers un document séparé, ou signalé
+  comme manquant.
+- **Non** → demander directement, sans le formalisme `❓/➡️`, quel format viser parmi les quatre
+  définis dans `diataxis.md`, puis signaler sans détour ce qui, dans le contenu lu à l'étape 1, n'y
+  entre pas. Ne pas choisir le format à la place de l'utilisateur dans les deux cas.
 
 ## 3. Restructurer
 
