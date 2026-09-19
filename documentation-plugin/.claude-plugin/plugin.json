@@ -1,0 +1,13 @@
+{
+  "name": "documentation-plugin",
+  "description": "Documentation selon la méthodologie Diataxis : créer (create), restructurer vers un format (restructure), modifier un élément sans y introduire de justification (edit).",
+  "version": "0.1.0",
+  "author": {
+    "name": "arenier",
+    "url": "https://github.com/arenier"
+  },
+  "homepage": "https://github.com/arenier/claude-skills",
+  "repository": "https://github.com/arenier/claude-skills",
+  "license": "MIT",
+  "keywords": ["documentation", "diataxis", "writing"]
+}

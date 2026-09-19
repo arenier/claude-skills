@@ -67,6 +67,22 @@ repo, `create-pr` en applique les conventions de branche et de PR.
 | `pr-review` | Relit une PR en la confrontant aux ADR et conventions ; produit une fiche de review et un commentaire prêt à coller. Consultatif : ne merge ni ne pousse. |
 | `pr-review-triage` | Traite une review déjà postée : vérifie chaque point contre le code, attribue un double verdict, applique les correctifs retenus avec test de non-régression, répond en commentaire. |
 
+### Plugin `documentation-plugin`
+
+Trois skills qui couvrent l'écriture de documentation selon la méthodologie
+[Diataxis](https://diataxis.fr/) : un document ne doit tenir que dans un seul de ses quatre formats
+(tutorial, how-to guide, reference, explanation). Les critères de chaque format et la checklist de
+conformité commune sont dans [`documentation-plugin/diataxis.md`](documentation-plugin/diataxis.md).
+`create` et `restructure` s'appuient sur `grilling` — une interview par rounds de questions, dont le
+plugin embarque sa propre copie — pour déterminer le format visé quand il n'est pas donné
+explicitement, et pour `create`, pour rassembler les sources du contenu.
+
+| Skill | Rôle |
+|---|---|
+| `create` | Rédige une documentation neuve dans l'un des quatre formats. |
+| `restructure` | Réécrit une documentation existante pour la faire tenir dans l'un des quatre formats. |
+| `edit` | Ajoute ou modifie un élément d'une documentation existante, sans changer son format ni y introduire de justification hors du format `explanation`. |
+
 ## Skills de déploiement
 
 ### `deploy-actual-gcp`
