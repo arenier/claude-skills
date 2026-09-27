@@ -6,15 +6,15 @@ argument-hint: <PR# | rien = la PR ouverte>
 
 # Relecture de pull request
 
-Produit un avis de relecture sur une PR de **ce repo** et, sur go explicite, le poste en
-commentaire GitHub. La valeur de ce skill n'est pas la checklist générique (lint, tests, types — la
-CI les couvre déjà) : c'est la **confrontation du diff aux décisions actées du projet**. Les ADR de
-`docs/adr/**` consolident les arbitrages tranchés ; une relecture qui ne les confronte pas au diff
-laisse repasser la même erreur.
+Produit un avis de relecture sur une PR de **ce repo** et, sur go explicite, le poste en commentaire
+GitHub. La valeur de ce skill n'est pas la checklist générique (lint, tests, types — la CI les couvre
+déjà) : c'est la **confrontation du diff aux décisions actées du projet**. Les ADR de `docs/adr/**`
+consolident les arbitrages tranchés ; une relecture qui ne les confronte pas au diff laisse repasser
+la même erreur.
 
-Les ADR sont **contraignants** : c'est le référentiel contre lequel tu juges, pas ton goût
-personnel. Une remarque sans ADR ni conséquence concrète est une opinion — elle descend en `🟡` ou
-en `✍️`, jamais en bloquant.
+Les ADR sont **contraignants** : c'est le référentiel contre lequel tu juges, pas ton goût personnel.
+Une remarque sans ADR ni conséquence concrète est une opinion — elle descend en `🟡` ou en `✍️`,
+jamais en bloquant.
 
 ## Quand l'utiliser
 
@@ -25,235 +25,91 @@ en `✍️`, jamais en bloquant.
 
 - **traiter** une review déjà postée (vérifier les points, corriger) → `pr-review-triage`.
 - **écrire / créer** une PR → `create-pr`.
-- une PR **Dependabot** → la relecture d'un bump de dépendance ne relève pas de ce skill ; le dire
-  et s'arrêter sans produire de fiche.
+- une PR **Dependabot** → `collect.sh` la signale ; le dire et s'arrêter sans produire de fiche.
 
-## Entrée
+## Déroulé
 
-Le numéro de PR. S'il n'est pas fourni, prends la seule PR ouverte
-(`gh pr list --state open --json number,title`). S'il y en a plusieurs, demande laquelle plutôt que
-d'en choisir une. Refuse le mode « relis toutes les PR » : une PR à la fois.
+Les scripts rassemblent les faits et mettent en forme ; toi, tu juges. Rien de ce qu'un script
+établit ne se refait à la main, et rien de ce qui demande du jugement ne se délègue à un `grep`.
 
-## Prérequis
+| # | Étape | Qui |
+|---|---|---|
+| 1 | Rassembler PR, diff, fichiers en version PR et faits mécaniques | script `collect.sh` |
+| 2 | Établir l'intention | jugement |
+| 3 | Lire CLAUDE.md et les ADR routés | jugement |
+| 4 | Lire le code, chercher la réfutation | jugement |
+| 5 | Trancher les vérifications hors-diff | jugement, sur les résultats bruts de l'étape 1 |
+| 6 | Filtrer, classer, plafonner les constats | jugement |
+| 6b | Second avis à froid, si un critère est rempli | jugement (proposer, attendre le go) |
+| 7 | Écrire `review.json` | jugement |
+| 8 | Calculer le verdict, rendre fiche et commentaire | script `render.py` |
+| 9 | Poster, sur go explicite | script `post.sh` |
 
-1. `gh --version` répond → sinon : `` `gh` (GitHub CLI) requis. Installation : `brew install gh`. ``
-   et arrête-toi.
-2. `gh auth status` rapporte une session → sinon : `` `gh` installé mais non authentifié. Lance
-   `gh auth login` puis relance. `` et arrête-toi.
-
-Aucun mode n'exige un arbre de travail propre : toute la relecture est en lecture seule.
-
-## Livrable attendu
-
-**Deux blocs streamés dans la conversation. Aucun fichier créé. Aucun appel `gh` qui écrit, sauf go
-explicite (voir Interdits).**
-
-### Bloc 1 — Fiche de review
-
-```
-## Review — PR #<N> · <titre>
-
-| Champ | Valeur |
-|---|---|
-| **Verdict** | 🟢 Mergeable · 🟡 Mergeable avec réserves · 🔴 À ne pas merger |
-| **Réserves** | <titres des constats 🔴 et 🟠, 3 au plus, séparés par ` · `, chacun avec son `path:line` · `+N autres` au-delà> — ou `aucune` |
-| **Intention** | <ce que la PR cherche à faire, en 1 phrase, tirée du titre/body/commits> |
-| **Périmètre** | <X fichiers · +A/-S lignes · zones touchées : api / web / libs / docker / docs …> |
-| **Contextes / libs touchés** | <apps et libs Nx concernés ; bounded context `recognition` ou lib partagée> |
-| **Titre Conventional Commits** | <conforme (`type(scope): sujet`, impératif, minuscule) / ⚠️ non conforme : <détail>> |
-| **CI** | <verte / rouge sur `<job>` (<cause>) / en attente / non lancée> — read-only, ne colore pas le verdict |
-| **ADR confrontés** | <numéros des ADR réellement relus pour cette review, ex. 0002 · 0006> |
-| **Schéma / migration** | <non concerné / entité ou schéma Postgres modifié dans `infrastructure` AVEC migration / ⚠️ SANS migration> |
-| **Tests** | <N spec(s) ajoutés/modifiés · couvre <quoi> / ⚠️ domaine ou application ajouté SANS test> |
-| **Frontières Nx** | <tags posés sur les nouveaux projets · imports conformes à `@nx/enforce-module-boundaries` / 🔴 <import interdit : path>> |
-| **Jumeaux** | <aucun / <jumeau identifié : chemin> · <corrigé / NON corrigé>> |
-| **Vérifications lancées** | lecture de code + lecture CI (read-only). **Ni lint, ni test, ni build lancés localement.** |
-| **Second avis à froid** | <non déclenché / déclenché (<critère>) · N constats · M retenus> |
-
-### Constats
-
-#### 🔴 Bloquants
-1. **<titre court>** — `path:line`
-   - **Ce qui casse** : <scénario concret : entrée/état → comportement faux, ou ADR violé>
-   - **Règle** : <ADR 000X (intitulé), ou la convention de CLAUDE.md qui la porte>
-   - **Correctif** : <la modification à faire, en 1-3 lignes ou un extrait de code>
-
-#### 🟠 À corriger avant merge
-<même format>
-
-#### 🟡 Suggestions (non bloquant)
-<titre — path:line — recommandation en 1 ligne>
-
-#### 💬 Questions à l'auteur
-<ce qui ne se tranche pas sans lui : intention, arbitrage, contexte hors diff>
-
-#### ✍️ Style & altitude
-<1-3 lignes agrégées : lisibilité, nommage, longueur des commentaires, découpage — ce qui n'a pas de conséquence fonctionnelle. « Rien à signaler » est une réponse valide.>
-```
-
-**Verdict et Réserves ouvrent la fiche** : ce qui bloque doit être lisible sans dérouler le tableau
-ni les constats. **Réserves** = les constats 🔴 et 🟠 uniquement ; les 🟡 et 💬 n'y figurent pas. Un
-verdict 🔴 a des réserves lui aussi (ses bloquants) : la ligne est renseignée dans tous les cas.
-
-Une ligne du tableau sans objet se remplit `non concerné` (ex. **Schéma / migration** quand la PR ne
-touche pas `infrastructure`) plutôt que de s'inventer une préoccupation. **Multi-tenant : non
-concerné** — ce repo n'a pas de clé tenant (usage personnel, un seul utilisateur · ADR 0006).
-
-Omettre les sous-sections de constats vides plutôt que d'écrire « aucun » — **sauf `✍️ Style &
-altitude`**, toujours renseignée : c'est le seul endroit qui survit au plafond de constats (étape 6),
-et la première chose qu'un relecteur humain voit. L'y agréger en 1-3 lignes, jamais en constats
-numérotés.
-
-Si **zéro constat**, remplacer `### Constats` par : `Aucun constat : le diff est conforme aux ADR et
-conventions confrontés ci-dessus.` — et garder `✍️ Style & altitude`.
-
-### Bloc 2 — Commentaire prêt à coller
-
-Précédé de la frontière, non négociable :
-
-```
----
-
-## Commentaire à coller sur la PR
-```
-
-Puis, dans une fence ` ```markdown ` :
-
-```markdown
-<!-- pr-review -->
-**Review** · <🟢 Mergeable / 🟡 Mergeable avec réserves / 🔴 À ne pas merger>
-
-> **Réserves** — <titres des constats 🔴 et 🟠, 3 au plus, séparés par ` · ` · `+N autres` au-delà> (ou : `aucune`)
-
-<1-2 phrases : ce que fait la PR + la raison du verdict>
-
-<Si la CI n'est pas verte : « CI <rouge sur `<job>` / en attente> — hors verdict. »>
-
-<details open>
-<summary><b>🔴 Bloquants (N)</b></summary>
-
-- **<titre>** (`path:line`) — <ce qui casse> → <correctif>
-
-</details>
-
-<details open>
-<summary><b>🟠 À corriger (N)</b></summary>
-
-- **<titre>** (`path:line`) — <ce qui casse> → <correctif>
-
-</details>
-
-<details>
-<summary><b>🟡 Suggestions (N)</b></summary>
-
-- <titre> (`path:line`) — <recommandation>
-
-</details>
-
-<details>
-<summary><b>💬 Questions (N)</b></summary>
-
-- <question>
-
-</details>
-
-<details>
-<summary><b>✍️ Style & altitude</b></summary>
-
-- <remarques de lisibilité agrégées, ou « rien à signaler »>
-
-</details>
-
-_Relecture statique : lecture de code + CI (read-only). Ni lint, ni test, ni build lancés — un 🟢 veut dire « rien trouvé en lecture », pas « ça compile »._
-```
-
-Le marqueur `<!-- pr-review -->` en tête rend l'opération rejouable (étape 7). Chaque catégorie de
-constats est un `<details>` repliable — le verdict et les **Réserves** restent lisibles sans dérouler.
-Trois règles pour que ça rende sur GitHub :
-
-- **Une ligne vide après `</summary>` est obligatoire**, sinon la liste intérieure n'est pas rendue.
-- **`🔴 Bloquants` et `🟠 À corriger` portent `open`** (ce qui bloque doit être visible d'entrée) ;
-  `🟡`, `💬` et `✍️` restent repliés (`<details>` sans `open`).
-- Les catégories vides s'omettent, **sauf `✍️ Style & altitude`** (toujours présente, repliée). Le
-  compteur `(N)` dans le `<summary>` donne le volume sans dérouler.
-
-## Process
-
-### 1. Rassembler le diff et le contexte
+## 1. Rassembler
 
 ```bash
-gh pr view <N> --json number,title,body,author,state,isDraft,baseRefName,headRefName,additions,deletions,files,commits,statusCheckRollup,labels
-gh pr diff <N>
+${CLAUDE_SKILL_DIR}/collect.sh [PR#]
 ```
 
-- `state` ≠ `OPEN` → le signaler et s'arrêter (rien à relire).
-- Auteur Dependabot (ou label `dependencies`/`Dependabot`) → le dire et s'arrêter, sans fiche.
-- `isDraft: true` → continuer, mais le mentionner dans le verdict (un draft se relit, ne se bloque
-  pas).
-- `baseRefName` ≠ `main` → le signaler (PR empilée : le diff peut inclure la PR parente).
+Sans numéro : prend la seule PR ouverte ; s'il y en a plusieurs, le script les liste et sort en code
+3 — demander laquelle plutôt que d'en choisir une. Refuser le mode « relis toutes les PR » : une PR à
+la fois.
 
-Un diff > ~2000 lignes ne se lit pas d'un bloc : le lire **fichier par fichier**, priorisé par le
-routage de l'étape 3.
+Le script vérifie `gh` (installé, authentifié) et écrit dans un répertoire de travail (dernière ligne
+`WORKDIR=…`) : `pr.json`, `diff.patch`, **chaque fichier touché dans sa version PR** sous `head/`, et
+`facts.md`, qu'il affiche :
 
-### 2. Établir l'intention
+- **Arrêts** : PR non ouverte ou Dependabot → s'arrêter. Draft → verdict indicatif. Base ≠ `main` → PR
+  empilée, le diff peut inclure la PR parente : le signaler.
+- **Taille** : lecture fichier par fichier au-delà de 2000 lignes ; fan-out à proposer au-delà de 40
+  fichiers ou 2500 lignes ; critère d'enjeu du second avis.
+- **Titre** : forme Conventional Commits. L'impératif et la capacité du titre à se tenir seul (il
+  devient le message de commit de `main` au squash) restent à juger.
+- **CI** : verte, rouge sur tel job, en attente, non lancée.
+- **Routage ADR** : pour chaque fichier, les ADR qui le régissent.
+- **Vérifications hors-diff** : résultats bruts des `grep` (imports ajoutés dans `domain` et
+  `application`, specs, schéma et migrations, APIs verrouillées, assertions `as`).
 
-Depuis le titre, le body et les messages de commit : **que cherche à faire cette PR ?** Sans
-intention claire, une relecture dégénère en chasse au style.
+## 2. Établir l'intention
 
-- Vérifier le **titre Conventional Commits** : forme `type(scope): sujet`, impératif, minuscule,
-  ~70 caractères. Le repo n'a **pas** de commitlint — se limiter à la forme de base. Le merge étant
-  un squash (workflow Git de CLAUDE.md), ce titre devient le message de commit de `main` : il doit
-  se tenir seul.
-- Si l'intention reste indéterminable (body vide, commits « wip ») : ne pas s'arrêter — la noter en
-  💬 et relire sur la seule base des ADR.
+Depuis le titre, le body et les messages de commit : **que cherche à faire cette PR ?** Sans intention
+claire, une relecture dégénère en chasse au style. Si elle reste indéterminable (body vide, commits
+« wip »), ne pas s'arrêter : la noter en 💬 et relire sur la seule base des ADR.
 
-### 3. Confronter aux ADR et router le diff
+## 3. Lire les décisions
 
-Lis `CLAUDE.md` puis les ADR **utiles au diff** dans `docs/adr/**` — **lis les fichiers**, ne te fie
-pas à un résumé de mémoire. Route chaque chemin touché vers les décisions qui le régissent :
+Lis `CLAUDE.md` puis les ADR listés par le routage — **lis les fichiers**, ne te fie pas à un résumé
+de mémoire. Le routage dit *quels* ADR ouvrir ; ce qu'ils interdisent précisément, c'est leur texte
+qui le dit. Repères pour savoir quoi y chercher :
 
-| Chemin touché | ADR / convention à confronter |
+| Zone | Ce que l'ADR tranche |
 |---|---|
 | `libs/*/domain/**` | 0002 — dépend de **rien** : ni framework, ni ORM, ni HTTP, ni autre contexte. Pas de primitive nue : value objects validant à la construction. |
 | `libs/*/application/**` | 0002 — dépend du `domain` seul, parle aux **ports**, jamais aux adapters. 0003 — pas d'event bus. |
 | `libs/*/infrastructure/**` | 0002 — personne n'en dépend hors composition root. 0006 — le SQL, le schéma Postgres et les migrations vivent **ici**. |
-| `apps/api/**` (orchestration) | 0003 — seul module à connaître plus d'un contexte ; ne manipule que des **DTO de frontière**, jamais un objet de domaine ; ne porte aucune règle exprimable dans un contexte. |
-| `apps/web/**` | 0002 — feature-slice ; une slice n'importe pas l'intérieur d'une autre (passer par une lib partagée). |
-| `libs/shared/**` | 0002 — importable par tous, n'importe **aucun** contexte ; une lib par sujet nommé, jamais `common`/`utils`. |
-| Reconnaissance (adapter VLM) | 0005 — derrière `ShelfScannerPort` ; tests sur réponses enregistrées, non-régression photos réelles en test manuel séparé. |
-| `package.json`, `.yarnrc.yml`, lockfile, Volta | 0001 — Yarn 4 (jamais Classic), pins exacts (jamais de plage), `nodeLinker: node-modules` (pas de PnP). |
-| `vite.config.*`, `vitest.config.*`, générateurs Nx | 0007 — Vite/Vitest partout, ni webpack ni Jest ; `apps/api` passe par SWC (`unplugin-swc`) pour les métadonnées de décorateurs. |
-| `docker-compose.yml`, scripts de déploiement | 0006 — base = Postgres managé (Neon) hors du bucket ; pas de montage gcsfuse ni SQLite comme base applicative. 0004 — Cloud Run + bucket. |
-| Nouveau projet (app ou lib) | tags `type:` / `context:` / `scope:` posés dans `nx.tags` de son `package.json` — sinon il échappe aux frontières. |
+| `apps/api/**` | 0003 — seul module à connaître plus d'un contexte ; ne manipule que des **DTO de frontière** ; ne porte aucune règle exprimable dans un contexte. |
+| `apps/web/**` | 0002 — feature-slice ; une slice n'importe pas l'intérieur d'une autre. |
+| `libs/shared/**` | 0002 — n'importe **aucun** contexte ; une lib par sujet nommé, jamais `common`/`utils`. |
+| Adapter VLM | 0005 — derrière `ShelfScannerPort` ; tests sur réponses enregistrées. |
+| Outillage JS | 0001 — Yarn 4, pins exacts, `nodeLinker: node-modules`. 0007 — Vite/Vitest, SWC pour `apps/api`. |
+| Déploiement | 0004 — Cloud Run + bucket. 0006 — Postgres managé, ni gcsfuse ni SQLite comme base. |
 
-**Fan-out.** Défaut : **relecture inline**, contexte partagé, sortie déterministe. Le déclencheur
-est le **volume**, pas le nombre de zones touchées : au-delà de ~40 fichiers ou ~2500 lignes,
-proposer un découpage en sous-agents par axe (correction · frontières Nx · tests · front), annoncer
-le coût, et **attendre un go explicite**. ⚠️ Ne pas découper une feature qui traverse les couches
-(un slice web + l'API + une migration, c'est sa forme normale) : c'est justement la **cohérence
-inter-couches** qui donne les meilleurs constats. Après fan-out : dédupliquer, **re-vérifier chaque
-🔴 soi-même**, et relire les jonctions entre axes (l'angle mort de tout découpage).
+**Multi-tenant : non concerné** — ce repo n'a pas de clé tenant (usage personnel · ADR 0006).
 
-### 4. Lire le code — dans la version de la PR
+**Fan-out** (seulement si `facts.md` le propose) : annoncer le coût et **attendre un go explicite**
+avant de découper en sous-agents par axe (correction · frontières Nx · tests · front). ⚠️ Ne pas
+découper une feature qui traverse les couches (un slice web + l'API + une migration, c'est sa forme
+normale) : c'est la **cohérence inter-couches** qui donne les meilleurs constats. Après fan-out :
+dédupliquer, **re-vérifier chaque 🔴 soi-même**, relire les jonctions entre axes.
 
-Un hunk ment par omission. Pour chaque fichier non trivialement touché : **ouvrir le fichier
-entier** autour du hunk.
+## 4. Lire le code
 
-> ⚠️ **Le checkout local n'est presque jamais la branche de la PR.** Un `Read` sur un chemin touché
-> renvoie alors la version de **`main`**, sans les changements — de quoi fabriquer des constats
-> entièrement faux (« le port n'est pas propagé » alors que la PR le propage). **Vérifie d'abord** :
-> `git rev-parse --abbrev-ref HEAD` contre le `headRefName` de l'étape 1. S'ils diffèrent, récupère
-> chaque fichier touché **dans sa version PR, sans checkout** :
->
-> ```bash
-> gh api "repos/{owner}/{repo}/contents/<path>?ref=<headRefName>" --jq .content | base64 -d > <scratchpad>/<basename>
-> ```
->
-> `{owner}/{repo}` est substitué par `gh` depuis le remote courant — ne jamais coder le repo en dur.
-> Les fichiers **non touchés** par la PR (adapters voisins, entités, specs existantes) se lisent
-> bien depuis le checkout local : ils sont identiques sur les deux branches.
+Un hunk ment par omission. Pour chaque fichier non trivialement touché : **ouvrir le fichier entier**
+dans `WORKDIR/head/` — jamais depuis le checkout local, qui est presque toujours `main` et montrerait
+le code sans les changements de la PR. Les fichiers **non touchés** (adapters voisins, entités, specs
+existantes) se lisent bien depuis le checkout : ils sont identiques sur les deux branches.
 
-Puis, pour chaque constat suspecté, va chercher la réfutation avant d'accuser :
+Pour chaque constat suspecté, va chercher la réfutation avant d'accuser :
 
 - Un import qui semble interdit peut passer par une lib partagée légitime — vérifier la cible.
 - Un use case qui semble parler à un adapter peut parler à un **port** injecté — `grep` le module.
@@ -264,118 +120,129 @@ Puis, pour chaque constat suspecté, va chercher la réfutation avant d'accuser 
 
 C'est l'étape qui sépare une relecture utile d'une liste de faux positifs.
 
-### 5. Les vérifications hors-diff (la vraie valeur)
+## 5. Trancher les vérifications hors-diff
 
-Une lecture attentive trouve seule les bugs de logique locale. Ce qu'elle ne fait **jamais**
-spontanément, c'est sortir du diff. Chaque vérification ci-dessous demande une action (un `grep`,
-une lecture hors diff) et **son résultat s'inscrit dans la fiche, y compris « rien »**.
+`facts.md` donne les résultats bruts ; chacun reste un **candidat**, à confirmer par la lecture de
+l'étape 4. Chaque vérification finit dans la fiche, y compris « rien ».
 
-| # | Vérification | Action | Si positif |
+| # | Vérification | Ce que tu juges | Si confirmé |
 |---|---|---|---|
-| 1 | **Frontières Nx** — un import franchit une frontière d'architecture | `grep` les imports ajoutés dans `libs/*/domain` et `libs/*/application` ; croiser avec les règles `@nx/enforce-module-boundaries` de `eslint.config.mjs` | 🔴 → ADR 0002 |
-| 2 | **Jumeaux** — le correctif laisse un chemin frère intact (adapter ↔ adapter, use case single ↔ bulk, VO ↔ VO sœur, slice web dupliquée) | `grep` la **signature du défaut** (pas le nom de fichier) dans tout le repo ; auditer chaque appelant de la méthode corrigée | 🟠 — corrigé, ou listé comme dette dans la description. Jamais silencieux. |
-| 3 | **Comportement verrouillé par un test ?** | `grep` la spec du fichier **et** de ses appelants ; vérifier la présence des **cas d'erreur** | 🟠 si rien ne le verrouille → conventions de test (CLAUDE.md) |
-| 4 | **Schéma / entité ↔ migration** — entité ou schéma Postgres modifié dans `infrastructure` sans migration | croiser `git diff --name-only` avec le répertoire de migrations d'`infrastructure` | 🔴 sans discussion (schéma non auto-synchronisé · ADR 0006) |
-| 5 | **APIs verrouillées introduites** — Yarn Classic, plage de versions, PnP, webpack, Jest, event bus (`@nestjs/cqrs`, EventEmitter applicatif), montage gcsfuse du bucket ou SQLite comme base applicative | `grep` le diff pour ces signatures | 🔴 → ADR 0001 / 0003 / 0006 / 0007 |
-| 6 | **`as` interdit** — une assertion de type introduite | `grep` le diff pour ` as ` (hors `as const`) | 🟠 → convention CLAUDE.md (`assertionStyle: 'never'`) ; proposer `satisfies` ou un type guard |
+| 1 | **Frontières Nx** | l'import listé franchit-il vraiment une frontière ? croiser avec `@nx/enforce-module-boundaries` dans `eslint.config.mjs` | 🔴 → ADR 0002 |
+| 2 | **Jumeaux** — le correctif laisse un chemin frère intact (adapter ↔ adapter, single ↔ bulk, VO ↔ VO sœur, slice dupliquée) | aucun script ne connaît la signature du défaut : la déduire, puis `grep` la **signature** (pas le nom de fichier) dans tout le repo et auditer chaque appelant | 🟠 — corrigé, ou listé comme dette dans la description. Jamais silencieux. |
+| 3 | **Comportement verrouillé par un test ?** | la spec listée couvre-t-elle le changement, **cas d'erreur** compris ? | 🟠 si rien ne le verrouille → conventions de test (CLAUDE.md) |
+| 4 | **Schéma ↔ migration** | le fichier touché modifie-t-il vraiment le schéma ? | 🔴 sans discussion (ADR 0006) |
+| 5 | **APIs verrouillées** | la ligne introduit-elle l'API, ou la mentionne-t-elle (commentaire, chaîne) ? | 🔴 → ADR 0001 / 0003 / 0006 / 0007 |
+| 6 | **`as` interdit** | vraie assertion de type, ou faux positif (alias d'import, texte) ? | 🟠 → CLAUDE.md (`assertionStyle: 'never'`) ; proposer `satisfies` ou un type guard |
 
-### 6. Filtrer les constats avant de les écrire
+## 6. Filtrer les constats
 
 Un constat entre dans la fiche seulement s'il passe les quatre tests :
 
 1. **Localisé** — un `path:line` exact (le vrai fichier, pas la ligne du diff).
-2. **Étayé** — le fichier entier a été lu (étape 4), le `grep` de confirmation est fait. Si la
-   vérification est impossible, le formuler en 💬 (« je ne trouve pas le port pour X, injecté
-   ailleurs ? »), pas en constat.
+2. **Étayé** — le fichier entier a été lu, le `grep` de confirmation est fait. Si la vérification est
+   impossible, le formuler en 💬 (« je ne trouve pas le port pour X, injecté ailleurs ? »).
 3. **Conséquent** — un scénario concret : entrée/état → comportement faux, ou ADR nommément violé.
    Sans conséquence énonçable, c'est au mieux un 🟡.
 4. **Réfuté d'abord** — « et si c'était intentionnel ? le code alentour le gère-t-il déjà ? » Un
    constat qui ne survit pas à cette question est supprimé.
 
-Puis trier du plus grave au moins grave et **s'arrêter à ~10 constats**. Une fiche de 40 lignes de
-style enterre le seul bloquant qui compte. Ce que le plafond coupe ne disparaît pas : tout ce qui
-touche lisibilité, nommage, découpage part **agrégé** dans `✍️ Style & altitude`.
+Sévérités planchers, quel que soit le reste :
 
-### 6b. Second avis à froid (sous-agent aveugle) — optionnel
+- Entité ou schéma modifié **sans** migration → 🔴 (ADR 0006).
+- Logique métier ou correctif de bug **sans** test → au moins 🟠.
+- Un jumeau identifié, ni corrigé ni signalé → au moins 🟠.
 
-Cette relecture est **guidée** par les ADR : c'est sa force et son biais. Elle voit ce que les ADR
-décrivent et peut rater ce qu'un lecteur neuf verrait tout de suite. **Déclencher seulement si un
-critère d'enjeu OU de doute est rempli** — sur une PR ordinaire et propre, ça ne produit que du
-bruit :
+Puis **s'arrêter à ~10 constats**, du plus grave au moins grave. Une fiche de 40 lignes de style
+enterre le seul bloquant qui compte. Ce que le plafond coupe ne disparaît pas : lisibilité, nommage,
+découpage partent **agrégés** en 1-3 lignes dans `style`.
 
-- **Enjeu** : le diff touche l'adapter VLM (`ShelfScannerPort`), la persistance Postgres, un schéma,
-  ou fait > ~300 lignes.
+## 6b. Second avis à froid — optionnel
+
+Cette relecture est **guidée** par les ADR : c'est sa force et son biais. **Déclencher seulement si un
+critère est rempli** — sur une PR ordinaire et propre, ça ne produit que du bruit :
+
+- **Enjeu** : calculé par `collect.sh` (adapter VLM, persistance, schéma, > 300 lignes).
 - **Doute** : au moins un constat fini en 💬 faute de vérifiabilité ; un constat écarté sur une
   hypothèse non prouvée du comportement d'un tiers ; verdict 🟢 sans aucun constat sur un diff
   substantiel ; intention indéterminable ; un fichier clé illisible.
 
-**Proposer et attendre le go.** Un sous-agent `general-purpose`, en avant-plan, avec un prompt qui
-garantit l'**aveuglement** : lui donner le numéro de PR seul (jamais mes constats), lui interdire de
-lire `.claude/skills/**`, lui rappeler de récupérer les fichiers en **version PR**
-(`gh api …?ref=<headRefName>`), lui **interdire toute écriture**. Sa sortie n'est **pas** autorité :
-dédupliquer contre mes constats, repasser chaque **nouveau** constat par les quatre tests de
-l'étape 6 (vérifié par moi), ne **jamais** le publier séparément. Renseigner le champ **Second avis
-à froid** dans tous les cas.
+**Proposer et attendre le go.** Un sous-agent `general-purpose`, en avant-plan, **aveugle** : le
+numéro de PR seul (jamais tes constats), interdiction de lire `.claude/skills/**`, obligation de lire
+les fichiers en version PR (il peut lancer `collect.sh` lui-même), **interdiction de toute écriture**.
+Sa sortie n'est **pas** autorité : dédupliquer, repasser chaque **nouveau** constat par les quatre
+tests de l'étape 6, ne **jamais** le publier séparément.
 
-### 7. Verdict, puis poster (sur go)
+## 7. Écrire `review.json`
 
-Le verdict se lit **sur le code**, jamais sur la CI :
+Dans `WORKDIR/review.json`. Tout ce qui est mécanique (périmètre, titre, CI, verdict, réserves,
+compteurs) est calculé par `render.py` : ne l'y mets pas.
 
-| Verdict | Condition |
-|---|---|
-| 🔴 **À ne pas merger** | ≥ 1 constat 🔴 |
-| 🟡 **Mergeable avec réserves** | pas de 🔴, ≥ 1 constat 🟠 |
-| 🟢 **Mergeable** | ni 🔴 ni 🟠 |
-
-**La CI ne colore pas le verdict.** Une CI rouge/en attente est reportée dans le champ **CI** et au
-pied du commentaire, pas dans le verdict. Mais elle n'est pas neutre : si sa cause est un défaut du
-diff, ce défaut entre comme constat 🔴/🟠 et le verdict bouge **par le code**. Une CI verte ne
-rachète aucun constat.
-
-**Forçages** :
-
-- Entité/schéma modifié **sans** migration dans `infrastructure` → 🔴 (ADR 0006).
-- Logique métier ou correctif de bug **sans** test → minimum 🟠 (donc jamais 🟢).
-- Un jumeau identifié, ni corrigé ni signalé → minimum 🟠.
-- Draft → verdict indicatif, l'écrire (« PR en draft : verdict indicatif »).
-
-Le verdict est **consultatif** : il ne pose aucun label, ne repasse pas la PR en draft, ne bloque
-rien — la décision de merger reste humaine.
-
-**Poster (sur go explicite seulement).** Le marqueur `<!-- pr-review -->` rend l'opération
-rejouable :
-
-```bash
-# Un commentaire de review existe-t-il déjà ?
-gh pr view <N> --json comments \
-  --jq '.comments[] | select(.body | startswith("<!-- pr-review -->")) | {id, url}'
+```json
+{
+  "intention": "ce que la PR cherche à faire, en 1 phrase",
+  "contexts": "apps et libs Nx concernés ; bounded context ou lib partagée",
+  "adr": "ADR réellement relus pour cette review, ex. 0002 · 0006",
+  "schema": "non concerné | entité modifiée AVEC migration | ⚠️ SANS migration",
+  "tests": "N spec(s) ajoutés/modifiés · couvre <quoi> | ⚠️ domaine ou application SANS test",
+  "boundaries": "tags posés · imports conformes | 🔴 import interdit : <path>",
+  "twins": "aucun | <jumeau : chemin> · corrigé / NON corrigé",
+  "second_opinion": "non déclenché | déclenché (<critère>) · N constats · M retenus",
+  "summary": "1-2 phrases pour le commentaire : ce que fait la PR + la raison du verdict",
+  "findings": [
+    {"severity": "blocker", "title": "titre court", "location": "path:line",
+     "breaks": "entrée/état → comportement faux, ou ADR violé", "rule": "ADR 000X (intitulé) ou convention CLAUDE.md",
+     "fix": "la modification, en 1-3 lignes"},
+    {"severity": "major", "…": "mêmes champs que blocker"},
+    {"severity": "minor", "title": "…", "location": "path:line", "fix": "recommandation en 1 ligne"},
+    {"severity": "question", "title": "ce qui ne se tranche pas sans l'auteur"}
+  ],
+  "style": ["lisibilité, nommage, découpage — agrégé, 1-3 lignes ; liste vide = rien à signaler"]
+}
 ```
 
-- **Aucun** → `gh pr comment <N> --body-file <fichier>`
-- **Il en existe un** → le mettre à jour plutôt que d'en empiler un second :
-  `gh api -X PATCH /repos/{owner}/{repo}/issues/comments/{id} -F body=@<fichier>`
+Une ligne sans objet s'écrit `non concerné` plutôt que de s'inventer une préoccupation.
 
-Le corps contient du markdown multiligne : passer par `--body-file` / `-F body=@…`, jamais par
-`--body` inline.
+## 8. Rendre
+
+```bash
+python3 ${CLAUDE_SKILL_DIR}/render.py <WORKDIR>
+```
+
+Valide `review.json` (champs, sévérités, `path:line`) et refuse s'il manque quelque chose. Puis
+**calcule le verdict sur le code, jamais sur la CI** — 🔴 dès un bloquant, 🟡 dès un 🟠, 🟢 sinon —
+et affiche la fiche, la frontière `---` / `## Commentaire à coller sur la PR`, puis le commentaire,
+écrit aussi dans `WORKDIR/comment.md`. Recopier cette sortie telle quelle dans la conversation.
+
+La CI rouge ne colore pas le verdict, mais elle n'est pas neutre : si sa cause est un défaut du diff,
+ce défaut entre comme constat et le verdict bouge **par le code**. Une CI verte ne rachète aucun
+constat. Le verdict est **consultatif** : il ne pose aucun label et ne bloque rien.
+
+## 9. Poster (sur go explicite seulement)
+
+```bash
+${CLAUDE_SKILL_DIR}/post.sh <PR#> [WORKDIR]
+```
+
+Crée le commentaire, ou met à jour celui qui porte déjà le marqueur `<!-- pr-review -->` plutôt que
+d'en empiler un second.
 
 ## Interdits
 
 - **Aucune écriture GitHub sans go explicite.** Défaut : fiche + commentaire dans la conversation,
   rien de posté.
-- Après un go : `gh pr comment` / le PATCH du commentaire existant, **et rien d'autre**.
+- Après un go : `post.sh`, **et rien d'autre**.
 - **Toujours interdits**, même après un go : `gh pr review --approve`, `--request-changes`,
   `gh pr merge`, `gh pr close`, `gh pr edit`, l'auto-merge, tout changement de label/assignee. La
   décision GitHub reste à l'auteur.
-- **Ne modifie aucun fichier, ne pousse aucun commit.** Ce skill relit et propose des correctifs en
-  extraits ; l'application passe par `pr-review-triage` ou par l'implémentation à la main.
-- **N'installe rien, ne lance ni lint, ni test, ni build.** La CI se **lit** (read-only) ; elle ne
-  se reproduit pas. Conséquence assumée sur l'honnêteté : un 🟢 veut dire « rien trouvé en lecture »,
-  pas « ça compile ».
-- **Ne signale rien que tu n'as pas vu.** Pas de remarque déduite du titre ou d'un nom de fichier.
-  Une remarque fausse coûte plus cher que pas de remarque : elle décrédibilise tout le reste.
-- **Le sous-agent du second avis (étape 6b) n'écrit rien** : ni GitHub, ni fichier.
-- Toujours produire la **fiche avant** le commentaire, séparés par `---` + `## Commentaire à coller
-  sur la PR`.
+- **Ne modifie aucun fichier du repo, ne pousse aucun commit.** Ce skill relit et propose des
+  correctifs en extraits ; l'application passe par `pr-review-triage` ou par l'implémentation à la
+  main. Les fichiers de `WORKDIR` sont hors du repo.
+- **N'installe rien, ne lance ni lint, ni test, ni build.** La CI se **lit** ; elle ne se reproduit
+  pas. Conséquence assumée : un 🟢 veut dire « rien trouvé en lecture », pas « ça compile ».
+- **Ne signale rien que tu n'as pas vu.** Pas de remarque déduite du titre ou d'un nom de fichier, ni
+  d'un résultat de `grep` non confirmé par la lecture. Une remarque fausse coûte plus cher que pas de
+  remarque : elle décrédibilise tout le reste.
+- **Le sous-agent du second avis n'écrit rien** : ni GitHub, ni fichier.
 
 ## Composition
 

@@ -8,6 +8,32 @@ Un skill est un dossier contenant un `SKILL.md` : Claude Code le charge quand la
 demande correspond à sa description. Il peut embarquer des scripts, que Claude
 exécute au lieu de réinventer les commandes.
 
+## Principe : script ou jugement
+
+Chaque skill est découpé en étapes, et chaque étape est rangée d'un côté ou de
+l'autre (d'après [Skill Design: The Script vs. LLM Split](https://claude-world.com/articles/skill-design-script-vs-llm/)) :
+
+* **Script** — ce qui donne le même résultat à chaque fois : appels `gcloud` ou
+  `gh`, collecte d'état, `grep`, validation de format, calcul d'un verdict à
+  partir de règles, mise en forme d'un commentaire. Ça s'écrit en vrai code, que
+  Claude se contente de lancer. Pas de prose qui décrit une commande à
+  reconstituer.
+* **Jugement** — ce qui dépend du contexte : choisir un nom, décider si un
+  constat tient, trier une review, rédiger. Le `SKILL.md` n'y donne pas de
+  procédure, mais un cadre : des critères, des contraintes, des exemples.
+
+Le rythme est toujours le même : un script rapporte des faits, Claude en tire
+une décision, le script suivant l'exécute. Chaque `SKILL.md` s'ouvre sur une
+table **Déroulé** qui dit, étape par étape, qui fait quoi. Entre deux étapes, le
+contrat est un format explicite — un `review.json` que `render.py` valide avant
+de le mettre en forme, par exemple — plutôt qu'une consigne de présentation que
+le modèle suivrait plus ou moins bien.
+
+Les scripts sont référencés par `${CLAUDE_SKILL_DIR}`, que Claude Code remplace
+par le dossier du skill : ils marchent aussi bien par lien symbolique que
+depuis un plugin. Ils demandent `bash`, `python3` (3.9 et plus), et `gcloud` ou
+`gh` selon le skill.
+
 Ce repo sert de deux façons : les skills de déploiement GCP s'installent par lien
 symbolique (ci-dessous), et le reste est distribué comme **marketplace de plugins**
 Claude Code (voir [Marketplace `adri-skills`](#marketplace-adri-skills)).
@@ -63,9 +89,13 @@ repo, `create-pr` en applique les conventions de branche et de PR.
 
 | Skill | Rôle |
 |---|---|
-| `create-pr` | Ouvre une PR décrite — branche, commits, push, puis corps orienté relecture (contexte, modifications, tests, ADR, points d'attention). |
-| `pr-review` | Relit une PR en la confrontant aux ADR et conventions ; produit une fiche de review et un commentaire prêt à coller. Consultatif : ne merge ni ne pousse. |
-| `pr-review-triage` | Traite une review déjà postée : vérifie chaque point contre le code, attribue un double verdict, applique les correctifs retenus avec test de non-régression, répond en commentaire. |
+| `create-pr` | Ouvre une PR décrite — branche, commits, push, puis corps orienté relecture (contexte, modifications, tests, ADR, points d'attention). Scripts : relevé d'état, lint et tests, validation du titre et du corps avant ouverture. |
+| `pr-review` | Relit une PR en la confrontant aux ADR et conventions ; produit une fiche de review et un commentaire prêt à coller. Consultatif : ne merge ni ne pousse. Scripts : collecte des fichiers en version PR, routage vers les ADR, `grep` hors-diff, calcul du verdict et mise en forme. |
+| `pr-review-triage` | Traite une review déjà postée : vérifie chaque point contre le code, attribue un double verdict, applique les correctifs retenus avec test de non-régression, répond en commentaire. Scripts : collecte des retours avec leur péremption, mise en forme et mise à jour de la réponse, réécriture de message de commit. |
+
+Les scripts communs (validation Conventional Commits, commit sur chemins
+explicites, commentaire mis à jour par marqueur) sont dans
+[`adri-plugin/scripts/`](adri-plugin/scripts/).
 
 ### Plugin `documentation-plugin`
 
@@ -82,6 +112,11 @@ explicitement, et pour `create`, pour rassembler les sources du contenu.
 | `create` | Rédige une documentation neuve dans l'un des quatre formats. |
 | `restructure` | Réécrit une documentation existante pour la faire tenir dans l'un des quatre formats. |
 | `edit` | Ajoute ou modifie un élément d'une documentation existante, sans changer son format ni y introduire de justification hors du format `explanation`. |
+
+Les trois skills relèvent d'abord, par
+[`scripts/signals.py`](documentation-plugin/scripts/signals.py), les tournures qui
+trahissent souvent un écart (état passé, justification, embranchement), puis les
+tranchent une à une pendant la relecture de conformité.
 
 ## Skills de déploiement
 
@@ -111,6 +146,10 @@ Ce qu'il encode et qui ne se devine pas :
   clients dans le même seau et les utilisateurs légitimes récoltent les 429 des
   autres.
 
+`preflight.sh` vérifie compte, ID et facturation avant de lancer ; `verify.sh`
+contrôle après coup que l'instance répond, que les choix ci-dessous sont
+toujours en place, et si le premier compte a été créé.
+
 Il s'appuie sur le travail de [daniefdz/actual-run](https://github.com/daniefdz/actual-run),
 dont il reprend l'approche ; les corrections de propagation IAM ont été
 reversées en amont.
@@ -136,6 +175,9 @@ Ce qu'il encode :
   `storage.buckets.get`.
 * **Les jobs vivent dans le projet de sauvegarde**, jamais dans les projets
   sources — qui n'ont donc aucune prise sur leurs propres copies.
+* **Une sauvegarde saine n'est pas une sauvegarde à jour.** `verify.sh` compare
+  chaque objet source à sa copie par MD5, et la dernière exécution du job, en
+  plus de l'`integrity_check` — qu'une copie périmée passe sans broncher.
 
 ### `deploy-freshrss-gcp`
 
@@ -167,6 +209,10 @@ Ce qu'il encode et qui ne se devine pas :
 * **`base_url` doit être connue avant le premier démarrage**, puisque FreshRSS
   la fige à l'installation. L'URL Cloud Run en numéro de projet est
   déterministe, donc calculable d'avance.
+
+`preflight.sh` vérifie compte, projet et facturation avant de lancer ;
+`verify.sh` contrôle ces choix sur le service déployé, puis lance une
+actualisation réelle de bout en bout.
 
 ## Licence
 
