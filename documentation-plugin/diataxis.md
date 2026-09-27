@@ -30,7 +30,9 @@ d'autres concepts. N'explique pas comment faire — ça, c'est le how-to.
 
 ## Checklist de conformité
 
-À appliquer en fin de skill, sur le résultat produit — jamais sur l'intention.
+À appliquer en fin de skill, sur le résultat produit — jamais sur l'intention. Le script
+[`scripts/signals.py`](scripts/signals.py) liste d'abord les lignes suspectes (état passé,
+justification, embranchement) ; la checklist tranche chacune et couvre ce qu'aucun mot-clé ne trahit.
 
 **Pureté du format**
 - Le document ne tient que dans un seul quadrant ; aucun paragraphe n'emprunte aux critères d'un

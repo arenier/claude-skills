@@ -9,6 +9,15 @@ Faire porter le changement demandé sur le document tel qu'il est, sans dériver
 glisser de justification qu'il n'admet pas. Lire d'abord [`../../diataxis.md`](../../diataxis.md)
 pour les critères de chaque format et la checklist de conformité de l'étape 4.
 
+## Déroulé
+
+| # | Étape | Qui |
+|---|---|---|
+| 1 | Identifier le format du document visé | jugement |
+| 2 | Modifier | jugement |
+| 3 | Relever les signaux dans les lignes modifiées | script `signals.py --diff` |
+| 4 | Relecture de conformité du bloc modifié | jugement, sur la checklist et les signaux |
+
 ## 1. Identifier le format du document visé
 
 Avant de toucher au contenu, déterminer dans lequel des quatre quadrants Diataxis le document se
@@ -33,8 +42,19 @@ Appliquer le changement demandé :
   justification dans un `tutorial`, un `how-to guide` ou une `reference`. En `explanation`, cette
   règle ne s'applique pas.
 
-## 3. Relecture de conformité
+## 3. Relever les signaux
+
+```bash
+python3 ${CLAUDE_SKILL_DIR}/../../scripts/signals.py <fichier> <format> --diff
+```
+
+`--diff` limite l'analyse aux lignes ajoutées depuis `HEAD` (le fichier entier s'il n'est pas suivi
+par git) : c'est le changement qui se vérifie, pas le document. Un signal n'est pas une violation,
+mais aucune de ces lignes ne doit échapper à l'étape suivante.
+
+## 4. Relecture de conformité
 
 Avant de rendre la main, relire le changement contre la checklist de `diataxis.md` (pureté du
 format, vérité de l'état, sobriété, justification hors Explanation) — appliquée au bloc modifié, pas
-au document entier. Corriger ce qui y manque avant de le présenter comme terminé.
+au document entier — en tranchant chaque signal de l'étape 3. Corriger ce qui y manque avant de le
+présenter comme terminé.
