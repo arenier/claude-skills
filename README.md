@@ -80,6 +80,11 @@ soit disponible à tout le monde sans installation manuelle :
 }
 ```
 
+Ce repo s'active lui-même `adri-plugin` de cette façon, dans son propre
+[`.claude/settings.json`](.claude/settings.json). La source `github` sert la
+version de `main` : une modification du plugin sur une branche ne s'applique
+qu'une fois mergée.
+
 ### Plugin `adri-plugin`
 
 Trois skills qui couvrent la vie d'une PR, de l'ouverture à la réponse aux
