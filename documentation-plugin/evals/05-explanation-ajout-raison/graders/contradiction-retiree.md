@@ -5,4 +5,4 @@ match: not_contains
 flags: i
 weight: 1
 ---
-ajouter des instances
+suffit d.ajouter
