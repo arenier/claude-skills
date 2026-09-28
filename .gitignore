@@ -1,2 +1,8 @@
 .DS_Store
 __pycache__/
+
+# Résultats de `claude plugin eval` : traces et rapports locaux
+**/evals/results/
+
+# Réglages Claude Code locaux
+.claude/settings.local.json
