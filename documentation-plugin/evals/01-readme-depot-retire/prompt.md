@@ -11,6 +11,16 @@ Voici notre `docs/README.md`. Il n'est pas encore dans ce dossier : écris-le te
 
 Ce que j'héberge, et comment c'est tenu.
 
+## Installer les outils
+
+Les skills de déploiement s'installent par lien symbolique depuis boite-a-outils :
+
+```bash
+git clone https://github.com/exemple/boite-a-outils.git
+ln -s "$PWD/boite-a-outils/deploy-app-gcp" ~/.claude/skills/deploy-app-gcp
+ln -s "$PWD/boite-a-outils/backup-app-gcp" ~/.claude/skills/backup-app-gcp
+```
+
 ## Dépôts liés
 
 | Dépôt | Visibilité | |
@@ -19,4 +29,4 @@ Ce que j'héberge, et comment c'est tenu.
 | [app-run](https://github.com/exemple/app-run) | public | déploiement de l'application |
 ````
 
-Les skills `deploy-app-gcp` et `backup-app-gcp` ont été retirés de boite-a-outils : le parc est maintenant déployé par Terraform. Mets à jour la ligne de ce dépôt dans le README.
+On a retiré les skills `deploy-app-gcp` et `backup-app-gcp` de boite-a-outils : ils créaient des écarts avec l'état Terraform, et c'est Terraform qui déploie le parc maintenant. Mets à jour le README en conséquence.

@@ -5,4 +5,4 @@ match: not_contains
 flags: i
 weight: 1
 ---
-(retir|ancien|supprim|n'\w+ plus|désormais|écart)
+deploy-app-gcp|backup-app-gcp|ln -s

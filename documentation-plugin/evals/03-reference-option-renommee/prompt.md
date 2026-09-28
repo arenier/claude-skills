@@ -17,6 +17,13 @@ Voici notre `docs/cli.md`. Il n'est pas encore dans ce dossier : écris-le tel q
 | `--out` | chemin | sortie standard | Fichier où écrire le rapport. |
 | `--quiet` | — | désactivé | N'affiche que les erreurs. |
 
+## Variables d'environnement
+
+| Variable | Effet |
+|---|---|
+| `RAPPORT_OUT` | Valeur par défaut de `--out`. |
+| `RAPPORT_FORMAT` | Valeur par défaut de `--format`. |
+
 ## Exemple
 
 ```bash
@@ -24,4 +31,4 @@ rapport --format json --out resultats.json donnees.csv
 ```
 ````
 
-L'option `--out` a été renommée `--output` dans la version 3. Mets la référence à jour.
+Dans la version 3, on a renommé `--out` en `--output` pour s'aligner sur les autres outils de l'équipe. Mets la référence à jour.

@@ -9,7 +9,7 @@ Voici notre `docs/premiers-pas.md`. Il n'est pas encore dans ce dossier : écris
 ````markdown
 # Premiers pas avec Mesure
 
-Dans ce tutoriel, tu installes Mesure, tu crées ton premier tableau de bord et tu l'affiches dans ton navigateur.
+Dans ce tutoriel, tu installes Mesure 1.8, tu crées ton premier tableau de bord et tu l'affiches dans ton navigateur.
 
 ## 1. Installer Mesure
 
@@ -32,6 +32,10 @@ mesure serve mon-tableau
 ```
 
 Ouvre http://localhost:8000 : ton tableau de bord s'affiche.
+
+## Recommencer
+
+Pour repartir de zéro, supprime le dossier `mon-tableau/` et relance `mesure init mon-tableau`.
 ````
 
-Passe le tutoriel à Mesure 2. En version 2, l'installation se fait avec `pipx install mesure`, et `mesure init` s'appelle `mesure new`. Le reste ne change pas.
+Mesure 2 est sortie et la 1.8 n'est plus maintenue. En version 2, on installe avec `pipx install mesure` (pip n'est plus supporté), et `mesure init` devient `mesure new`. Passe le tutoriel en version 2.

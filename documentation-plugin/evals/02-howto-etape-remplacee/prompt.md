@@ -21,6 +21,14 @@ Voici notre `docs/mettre-a-jour.md`. Il n'est pas encore dans ce dossier : écri
    ```bash
    curl -s -o /dev/null -w '%{http_code}\n' https://service.example.com/health
    ```
+
+## Revenir à la version précédente
+
+Relancer le script avec la version d'avant :
+
+```bash
+VERSION=2.3.1 ./deploy.sh mon-projet
+```
 ````
 
-La mise à jour ne passe plus par `deploy.sh` : on change la version de l'image dans `terraform/main.tf` (`image = "service:<version>"`), puis `terraform plan` et `terraform apply`. Corrige le guide.
+On a abandonné `deploy.sh` : il créait des écarts avec l'état décrit dans Terraform. Maintenant, la version se change dans `terraform/main.tf` (`image = "service:<version>"`), puis `terraform plan` et `terraform apply`. Corrige le guide.

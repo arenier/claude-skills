@@ -17,7 +17,7 @@ Une base managée facture une instance allumée en permanence, même sans trafic
 
 ## La simplicité
 
-Pas de réseau privé à configurer, pas d'identifiants de base à faire tourner : la sauvegarde est une copie de fichier.
+Pas de réseau privé à configurer, pas d'identifiants de base à faire tourner : la sauvegarde est une copie de fichier. Et si le trafic augmente, il suffit d'ajouter des instances du service.
 
 ## Les contreparties
 

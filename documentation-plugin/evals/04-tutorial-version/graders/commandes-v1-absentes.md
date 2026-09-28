@@ -5,4 +5,4 @@ match: not_contains
 flags: i
 weight: 1
 ---
-pip install mesure==|mesure init
+pip install|mesure init|1\.8

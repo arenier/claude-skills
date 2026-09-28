@@ -3,7 +3,6 @@ type: llm
 focus: {source: file, path: docs/premiers-pas.md}
 weight: 1
 ---
-- Le tutoriel déroule un seul chemin, du début au tableau de bord affiché, sans option ni variante selon la version installée.
-- L'installation utilise `pipx install mesure` et la création `mesure new mon-tableau`.
-- Les étapes suivantes restent cohérentes : le dossier `mon-tableau/`, `mesure serve`, l'adresse locale.
-- Aucune mention de la version 1 ni de ce qui a changé.
+- Aucune commande `pip install` ni `mesure init` ne reste, y compris dans la section « Recommencer ».
+- Le texte ne présente aucune alternative : pas de « si tu as la 1.8 », pas de « tu peux aussi ».
+- Le texte ne mentionne ni la version 1.8, ni la fin de maintenance, ni ce qui a changé entre les versions.
