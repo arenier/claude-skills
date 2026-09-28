@@ -1,2 +1,5 @@
 .DS_Store
 __pycache__/
+
+# Résultats de `claude plugin eval` : traces et rapports locaux
+**/evals/results/
