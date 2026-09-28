@@ -7,8 +7,17 @@ description: Rédige une documentation neuve dans l'un des quatre formats Diatax
 
 Rédiger un document qui tient dans un seul des quatre quadrants Diataxis, alimenté par des sources
 identifiées plutôt que reconstruit de mémoire. Lire d'abord [`../../diataxis.md`](../../diataxis.md) :
-les critères de chaque format et la checklist de conformité de l'étape 3 y sont définis une fois pour
+les critères de chaque format et la checklist de conformité de l'étape 4 y sont définis une fois pour
 les trois skills du plugin.
+
+## Déroulé
+
+| # | Étape | Qui |
+|---|---|---|
+| 1 | Déterminer le format et les sources | jugement (interview `grilling` si besoin) |
+| 2 | Rédiger | jugement |
+| 3 | Relever les signaux de non-conformité | script `signals.py` |
+| 4 | Relecture de conformité | jugement, sur la checklist et les signaux |
 
 ## 1. Déterminer le format et les sources
 
@@ -40,8 +49,22 @@ que ce qui est vrai dans l'état actuel des sources rassemblées ; aucune trace 
 n'est plus d'actualité. Hors `explanation`, ne pas justifier les choix : les motiver appartiendrait à
 un document `explanation` séparé, pas à celui-ci.
 
-## 3. Relecture de conformité
+## 3. Relever les signaux
+
+```bash
+python3 ${CLAUDE_SKILL_DIR}/../../scripts/signals.py <fichier> <tutorial|how-to|reference|explanation>
+```
+
+Liste, ligne par ligne, les tournures qui trahissent souvent un écart : trace d'un état passé
+(« auparavant », « n'est plus »…), justification hors `explanation` (« parce que », « afin de »…),
+embranchement dans un `tutorial` (« vous pouvez aussi », « optionnel »…). Un signal n'est pas une
+violation — « car » peut désigner un véhicule — mais aucune de ces lignes ne doit échapper à l'étape
+suivante.
+
+## 4. Relecture de conformité
 
 Avant de rendre la main, relire le document produit contre la checklist de `diataxis.md` (pureté du
-format, vérité de l'état, sobriété, justification hors Explanation). Corriger ce qui y manque avant
-de le présenter comme terminé — la relecture porte sur le résultat, pas sur l'intention de départ.
+format, vérité de l'état, sobriété, justification hors Explanation), en tranchant chaque signal de
+l'étape 3 : faux positif, ou écart à corriger. La checklist va au-delà des signaux — un paragraphe
+d'explication sans aucun mot-clé reste une impureté de format. Corriger ce qui y manque avant de le
+présenter comme terminé — la relecture porte sur le résultat, pas sur l'intention de départ.

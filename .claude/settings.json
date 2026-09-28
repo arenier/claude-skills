@@ -1,0 +1,10 @@
+{
+  "extraKnownMarketplaces": {
+    "adri-skills": {
+      "source": { "source": "github", "repo": "arenier/claude-skills" }
+    }
+  },
+  "enabledPlugins": {
+    "adri-plugin@adri-skills": true
+  }
+}
