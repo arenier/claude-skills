@@ -21,6 +21,14 @@
       "license": "MIT",
       "keywords": ["documentation", "diataxis", "writing"],
       "category": "documentation"
+    },
+    {
+      "name": "model-plugin",
+      "source": "./model-plugin",
+      "description": "Choix du modèle et du niveau d'effort pour une tâche ou un sous-agent (choose-model).",
+      "license": "MIT",
+      "keywords": ["model", "effort", "sub-agent"],
+      "category": "workflow"
     }
   ]
 }

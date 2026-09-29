@@ -40,7 +40,7 @@ Les skills sont distribués comme **marketplace de plugins** Claude Code (voir
 
 Le repo est une [marketplace de plugins Claude Code](https://code.claude.com/docs/en/plugin-marketplaces),
 déclarée dans [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json).
-Elle publie deux plugins, **`adri-plugin`** et **`documentation-plugin`**.
+Elle publie trois plugins, **`adri-plugin`**, **`documentation-plugin`** et **`model-plugin`**.
 
 Ajouter la marketplace et installer le plugin, en interactif :
 
@@ -107,6 +107,16 @@ Les trois skills relèvent d'abord, par
 [`scripts/signals.py`](documentation-plugin/scripts/signals.py), les tournures qui
 trahissent souvent un écart (état passé, justification, embranchement), puis les
 tranchent une à une pendant la relecture de conformité.
+
+### Plugin `model-plugin`
+
+Un skill qui choisit le modèle et le niveau d'effort d'une tâche, ou d'un sous-agent sur le point
+d'être lancé, au lieu de garder par défaut le modèle de la session. Écrit pour un abonnement
+Max/Team, où c'est le budget de session et de contexte qui compte, pas le prix au token.
+
+| Skill | Rôle |
+|---|---|
+| `choose-model` | Pose un quiz court (nature de la tâche, fil principal ou sous-agent, blocage préalable), puis recommande un couple modèle + effort et la commande `/model` pour y passer. Les benchmarks et retours derrière la table de correspondance sont dans [`EVIDENCE.md`](model-plugin/skills/choose-model/EVIDENCE.md). |
 
 ## Licence
 
