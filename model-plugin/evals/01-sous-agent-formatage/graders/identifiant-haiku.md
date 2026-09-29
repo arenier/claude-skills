@@ -1,7 +1,6 @@
 ---
 type: regex
 match: contains
-flags: i
 weight: 1
 ---
-haiku
+claude-haiku-4-5
