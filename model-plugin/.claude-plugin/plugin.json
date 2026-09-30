@@ -1,0 +1,13 @@
+{
+  "name": "model-plugin",
+  "description": "Choix du modèle et du niveau d'effort pour une tâche ou un sous-agent (choose-model).",
+  "version": "0.1.0",
+  "author": {
+    "name": "arenier",
+    "url": "https://github.com/arenier"
+  },
+  "homepage": "https://github.com/arenier/claude-skills",
+  "repository": "https://github.com/arenier/claude-skills",
+  "license": "MIT",
+  "keywords": ["model", "effort", "sub-agent"]
+}
