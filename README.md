@@ -73,14 +73,19 @@ qu'une fois mergée.
 ### Plugin `adri-plugin`
 
 Trois skills qui couvrent la vie d'une PR, de l'ouverture à la réponse aux
-retours. Écrits pour [pick-a-book](https://github.com/arenier/pick-a-book) :
-`pr-review` et `pr-review-triage` confrontent le diff aux ADR et conventions de ce
-repo, `create-pr` en applique les conventions de branche et de PR.
+retours. `pr-review` est **agnostique du dépôt** : il confronte le diff aux décisions
+actées du dépôt relu, lues dans ses ADR, son `CLAUDE.md` et ses rules, et un profil
+optionnel `.claude/pr-review.json` les complète (format dans
+[`PROFILE.md`](adri-plugin/skills/pr-review/PROFILE.md)). `pr-review-triage` et
+`create-pr` restent écrits pour [pick-a-book](https://github.com/arenier/pick-a-book).
+
+La relecture tourne aussi en routine cloud, sur chaque PR d'un dépôt branché : voir
+[`routines/pr-review/`](routines/pr-review/README.md).
 
 | Skill | Rôle |
 |---|---|
 | `create-pr` | Ouvre une PR décrite — branche, commits, push, puis corps orienté relecture (contexte, modifications, tests, ADR, points d'attention). Scripts : relevé d'état, lint et tests, validation du titre et du corps avant ouverture. |
-| `pr-review` | Relit une PR en la confrontant aux ADR et conventions ; produit une fiche de review et un commentaire prêt à coller. Consultatif : ne merge ni ne pousse. Scripts : collecte des fichiers en version PR, routage vers les ADR, `grep` hors-diff, calcul du verdict et mise en forme. |
+| `pr-review` | Relit une PR en la confrontant aux décisions et conventions du dépôt ; produit une fiche de review et un commentaire prêt à coller. Consultatif : ne merge ni ne pousse. Scripts : collecte des fichiers en version PR et du profil du dépôt, routage vers les décisions, `grep` hors-diff, calcul du verdict et mise en forme. |
 | `pr-review-triage` | Traite une review déjà postée : vérifie chaque point contre le code, attribue un double verdict, applique les correctifs retenus avec test de non-régression, répond en commentaire. Scripts : collecte des retours avec leur péremption, mise en forme et mise à jour de la réponse, réécriture de message de commit. |
 
 Les scripts communs (validation Conventional Commits, commit sur chemins

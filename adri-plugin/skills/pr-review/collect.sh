@@ -6,8 +6,11 @@ set -euo pipefail
 #   pr.json      metadata (title, author, state, base/head, files, commits, CI)
 #   diff.patch   the full diff
 #   head/<path>  every touched file in its PR version (not the local checkout)
+#   profile.json the repo's review profile (.claude/pr-review.json), read from
+#                the PR's BASE branch so the PR's author cannot alter it; `{}`
+#                when the repo has none
 #   facts.md     mechanical facts: stop conditions, size, title check, CI,
-#                ADR routing per file, and the grep-level checks
+#                decision routing per file, and the grep-level checks
 #
 #   ./collect.sh [PR#]
 #
@@ -64,6 +67,16 @@ while IFS= read -r path; do
     missing=$((missing + 1))
   fi
 done < <(gh pr view "$PR" --json files --jq '.files[].path')
+
+BASE_REF="$(gh pr view "$PR" --json baseRefName --jq .baseRefName)"
+gh repo view --json defaultBranchRef --jq .defaultBranchRef.name > "$WORKDIR/default_branch"
+if gh api -H "Accept: application/vnd.github.raw" \
+     "repos/{owner}/{repo}/contents/.claude/pr-review.json?ref=${BASE_REF}" \
+     > "$WORKDIR/profile.json" 2>/dev/null && python3 -c 'import json, sys; json.load(open(sys.argv[1]))' "$WORKDIR/profile.json" 2>/dev/null; then
+  :
+else
+  echo '{}' > "$WORKDIR/profile.json"
+fi
 
 python3 "$HERE/analyze.py" "$WORKDIR" > "$WORKDIR/facts.md"
 

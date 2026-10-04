@@ -1,20 +1,33 @@
 ---
 name: pr-review
-description: Relit une pull request de pick-a-book en confrontant chaque changement aux ADR et aux conventions du repo (CLAUDE.md + docs/adr/**), et produit une fiche de review + un commentaire prêt à coller ouvert par un verdict de mergeabilité. À utiliser quand on demande de relire, reviewer, ou donner un avis sur une PR — par numéro, par URL, ou « la PR ouverte ». Relecture statique : lit l'état de la CI en read-only, ne lance ni lint, ni test, ni build. Consultatif : ne merge pas, ne pousse rien, ne poste qu'après go explicite. Pour traiter une review déjà postée, c'est pr-review-triage.
+description: >-
+  Relit une pull request en confrontant chaque changement aux décisions actées du dépôt
+  (ADR, CLAUDE.md ou AGENTS.md, rules), et produit une fiche de review et un commentaire
+  prêt à coller ouvert par un verdict de mergeabilité. À utiliser quand on demande de
+  relire, reviewer, ou donner un avis sur une PR, par numéro, par URL, ou « la PR ouverte ».
+  Relecture statique, qui lit l'état de la CI en read-only et ne lance ni lint, ni test, ni
+  build. Consultatif, il ne merge pas, ne pousse rien et ne poste qu'après go explicite.
+  Pour traiter une review déjà postée, c'est pr-review-triage.
 argument-hint: <PR# | rien = la PR ouverte>
 ---
 
 # Relecture de pull request
 
-Produit un avis de relecture sur une PR de **ce repo** et, sur go explicite, le poste en commentaire
-GitHub. La valeur de ce skill n'est pas la checklist générique (lint, tests, types — la CI les couvre
-déjà) : c'est la **confrontation du diff aux décisions actées du projet**. Les ADR de `docs/adr/**`
-consolident les arbitrages tranchés ; une relecture qui ne les confronte pas au diff laisse repasser
-la même erreur.
+Produit un avis de relecture sur une PR du **dépôt courant** et, sur go explicite, le poste en
+commentaire GitHub. La valeur de ce skill n'est pas la checklist générique (lint, tests, types — la CI
+les couvre déjà) : c'est la **confrontation du diff aux décisions actées du projet**. Les décisions
+(ADR, conventions de `CLAUDE.md`, rules) consolident les arbitrages tranchés ; une relecture qui ne les
+confronte pas au diff laisse repasser la même erreur.
 
-Les ADR sont **contraignants** : c'est le référentiel contre lequel tu juges, pas ton goût personnel.
-Une remarque sans ADR ni conséquence concrète est une opinion — elle descend en `🟡` ou en `✍️`,
-jamais en bloquant.
+Le skill ne connaît aucun dépôt. Ce qui est propre à l'un — quelles décisions régissent quels chemins,
+quelles API sont proscrites, quelles vérifications ajouter — vient du **profil** du dépôt,
+`.claude/pr-review.json`, lu sur la branche de base de la PR (format dans [`PROFILE.md`](PROFILE.md)).
+Sans profil, le skill fonctionne sur les vérifications génériques, et les décisions se découvrent à la
+lecture.
+
+Les décisions du dépôt sont **contraignantes** : c'est le référentiel contre lequel tu juges, pas ton
+goût personnel. Une remarque sans décision citée ni conséquence concrète est une opinion — elle
+descend en `🟡` ou en `✍️`, jamais en bloquant.
 
 ## Quand l'utiliser
 
@@ -36,7 +49,7 @@ Les scripts rassemblent les faits et mettent en forme ; toi, tu juges. Rien de c
 |---|---|---|
 | 1 | Rassembler PR, diff, fichiers en version PR et faits mécaniques | script `collect.sh` |
 | 2 | Établir l'intention | jugement |
-| 3 | Lire CLAUDE.md et les ADR routés | jugement |
+| 3 | Lire l'index des conventions et les décisions routées | jugement |
 | 4 | Lire le code, chercher la réfutation | jugement |
 | 5 | Trancher les vérifications hors-diff | jugement, sur les résultats bruts de l'étape 1 |
 | 6 | Filtrer, classer, plafonner les constats | jugement |
@@ -56,19 +69,23 @@ Sans numéro : prend la seule PR ouverte ; s'il y en a plusieurs, le script les 
 la fois.
 
 Le script vérifie `gh` (installé, authentifié) et écrit dans un répertoire de travail (dernière ligne
-`WORKDIR=…`) : `pr.json`, `diff.patch`, **chaque fichier touché dans sa version PR** sous `head/`, et
-`facts.md`, qu'il affiche :
+`WORKDIR=…`) : `pr.json`, `diff.patch`, `profile.json`, **chaque fichier touché dans sa version PR**
+sous `head/`, et `facts.md`, qu'il affiche :
 
-- **Arrêts** : PR non ouverte ou Dependabot → s'arrêter. Draft → verdict indicatif. Base ≠ `main` → PR
-  empilée, le diff peut inclure la PR parente : le signaler.
+- **Arrêts** : PR non ouverte ou Dependabot → s'arrêter. Draft → verdict indicatif. Base ≠ branche par
+  défaut du dépôt → PR empilée, le diff peut inclure la PR parente : le signaler.
 - **Taille** : lecture fichier par fichier au-delà de 2000 lignes ; fan-out à proposer au-delà de 40
   fichiers ou 2500 lignes ; critère d'enjeu du second avis.
 - **Titre** : forme Conventional Commits. L'impératif et la capacité du titre à se tenir seul (il
   devient le message de commit de `main` au squash) restent à juger.
 - **CI** : verte, rouge sur tel job, en attente, non lancée.
-- **Routage ADR** : pour chaque fichier, les ADR qui le régissent.
-- **Vérifications hors-diff** : résultats bruts des `grep` (imports ajoutés dans `domain` et
-  `application`, specs, schéma et migrations, APIs verrouillées, assertions `as`).
+- **Profil** : `profile.json`, copie du `.claude/pr-review.json` de la branche de base — jamais celui
+  de la branche de la PR, que son auteur peut modifier. `{}` si le dépôt n'en a pas.
+- **Décisions à confronter** : l'index, le dossier des décisions et des rules, et, si le profil a des
+  routes, pour chaque fichier ce qui le régit.
+- **Vérifications hors-diff** : résultats bruts des `grep` — les générales (tests des fichiers
+  touchés, jumeaux) et celles du profil (imports dans les zones contraintes, interdits du dépôt,
+  fichiers qui vont de pair, vérifications à juger).
 
 ## 2. Établir l'intention
 
@@ -78,29 +95,26 @@ claire, une relecture dégénère en chasse au style. Si elle reste indétermina
 
 ## 3. Lire les décisions
 
-Lis `CLAUDE.md` puis les ADR listés par le routage — **lis les fichiers**, ne te fie pas à un résumé
-de mémoire. Le routage dit *quels* ADR ouvrir ; ce qu'ils interdisent précisément, c'est leur texte
-qui le dit. Repères pour savoir quoi y chercher :
+Lis l'index des conventions que `facts.md` liste (`CLAUDE.md`, `AGENTS.md`, ce que le profil désigne)
+puis les décisions que le routage désigne — **lis les fichiers**, ne te fie pas à un résumé de
+mémoire. Le routage dit *quoi* ouvrir ; ce qui est interdit, c'est leur texte qui le dit. Les rules
+dont le frontmatter `paths` cible un fichier du diff s'appliquent à ce fichier.
 
-| Zone | Ce que l'ADR tranche |
-|---|---|
-| `libs/*/domain/**` | 0002 — dépend de **rien** : ni framework, ni ORM, ni HTTP, ni autre contexte. Pas de primitive nue : value objects validant à la construction. |
-| `libs/*/application/**` | 0002 — dépend du `domain` seul, parle aux **ports**, jamais aux adapters. 0003 — pas d'event bus. |
-| `libs/*/infrastructure/**` | 0002 — personne n'en dépend hors composition root. 0006 — le SQL, le schéma Postgres et les migrations vivent **ici**. |
-| `apps/api/**` | 0003 — seul module à connaître plus d'un contexte ; ne manipule que des **DTO de frontière** ; ne porte aucune règle exprimable dans un contexte. |
-| `apps/web/**` | 0002 — feature-slice ; une slice n'importe pas l'intérieur d'une autre. |
-| `libs/shared/**` | 0002 — n'importe **aucun** contexte ; une lib par sujet nommé, jamais `common`/`utils`. |
-| Adapter VLM | 0005 — derrière `ShelfScannerPort` ; tests sur réponses enregistrées. |
-| Outillage JS | 0001 — Yarn 4, pins exacts, `nodeLinker: node-modules`. 0007 — Vite/Vitest, SWC pour `apps/api`. |
-| Déploiement | 0004 — Cloud Run + bucket. 0006 — Postgres managé, ni gcsfuse ni SQLite comme base. |
+Sans routage dans le profil (ou sans profil), pars de l'index : il renvoie d'ordinaire aux décisions
+(`docs/adr/`, `docs/decisions/`, `docs/`) et aux rules. Repère par zone touchée celles qui la
+concernent, ouvre-les, et ne cite dans la fiche que ce que tu as lu. Si le dépôt n'a aucune décision
+écrite, dis-le en 💬 plutôt que d'en inventer : une relecture sans référentiel ne peut produire que
+des 🟡 et des 💬, jamais un bloquant « de principe ».
 
-**Multi-tenant : non concerné** — ce repo n'a pas de clé tenant (usage personnel · ADR 0006).
+Le champ `notes` du profil, quand il existe, dit ce qui ne concerne pas ce dépôt (par exemple
+l'absence de multi-tenant) ou ce qui y est une forme normale (par exemple une feature qui traverse
+les couches).
 
 **Fan-out** (seulement si `facts.md` le propose) : annoncer le coût et **attendre un go explicite**
-avant de découper en sous-agents par axe (correction · frontières Nx · tests · front). ⚠️ Ne pas
-découper une feature qui traverse les couches (un slice web + l'API + une migration, c'est sa forme
-normale) : c'est la **cohérence inter-couches** qui donne les meilleurs constats. Après fan-out :
-dédupliquer, **re-vérifier chaque 🔴 soi-même**, relire les jonctions entre axes.
+avant de découper en sous-agents par axe (correction · frontières · tests · front, selon le dépôt).
+⚠️ Ne pas découper une feature qui traverse les couches : c'est la **cohérence inter-couches** qui
+donne les meilleurs constats. Après fan-out : dédupliquer, **re-vérifier chaque 🔴 soi-même**, relire
+les jonctions entre axes.
 
 ## 4. Lire le code
 
@@ -112,7 +126,8 @@ existantes) se lisent bien depuis le checkout : ils sont identiques sur les deux
 Pour chaque constat suspecté, va chercher la réfutation avant d'accuser :
 
 - Un import qui semble interdit peut passer par une lib partagée légitime — vérifier la cible.
-- Un use case qui semble parler à un adapter peut parler à un **port** injecté — `grep` le module.
+- Une couche qui semble parler directement à une implémentation peut parler à une **abstraction**
+  injectée (port, interface) — `grep` le module.
 - Un changement de comportement sans test visible peut être couvert par une spec existante — `grep`
   la spec du fichier et de ses appelants.
 - Un pattern qui choque peut être **l'idiome du repo** — le compter (`grep -rl …`) avant d'en faire
@@ -125,14 +140,19 @@ C'est l'étape qui sépare une relecture utile d'une liste de faux positifs.
 `facts.md` donne les résultats bruts ; chacun reste un **candidat**, à confirmer par la lecture de
 l'étape 4. Chaque vérification finit dans la fiche, y compris « rien ».
 
-| # | Vérification | Ce que tu juges | Si confirmé |
-|---|---|---|---|
-| 1 | **Frontières Nx** | l'import listé franchit-il vraiment une frontière ? croiser avec `@nx/enforce-module-boundaries` dans `eslint.config.mjs` | 🔴 → ADR 0002 |
-| 2 | **Jumeaux** — le correctif laisse un chemin frère intact (adapter ↔ adapter, single ↔ bulk, VO ↔ VO sœur, slice dupliquée) | aucun script ne connaît la signature du défaut : la déduire, puis `grep` la **signature** (pas le nom de fichier) dans tout le repo et auditer chaque appelant | 🟠 — corrigé, ou listé comme dette dans la description. Jamais silencieux. |
-| 3 | **Comportement verrouillé par un test ?** | la spec listée couvre-t-elle le changement, **cas d'erreur** compris ? | 🟠 si rien ne le verrouille → conventions de test (CLAUDE.md) |
-| 4 | **Schéma ↔ migration** | le fichier touché modifie-t-il vraiment le schéma ? | 🔴 sans discussion (ADR 0006) |
-| 5 | **APIs verrouillées** | la ligne introduit-elle l'API, ou la mentionne-t-elle (commentaire, chaîne) ? | 🔴 → ADR 0001 / 0003 / 0006 / 0007 |
-| 6 | **`as` interdit** | vraie assertion de type, ou faux positif (alias d'import, texte) ? | 🟠 → CLAUDE.md (`assertionStyle: 'never'`) ; proposer `satisfies` ou un type guard |
+Deux sont générales :
+
+| Vérification | Ce que tu juges | Si confirmé |
+|---|---|---|
+| **Jumeaux** — le correctif laisse un chemin frère intact (adapter ↔ adapter, single ↔ bulk, type ↔ type sœur, composant dupliqué) | aucun script ne connaît la signature du défaut : la déduire, puis `grep` la **signature** (pas le nom de fichier) dans tout le repo et auditer chaque appelant | 🟠 — corrigé, ou listé comme dette dans la description. Jamais silencieux. |
+| **Comportement verrouillé par un test ?** | le test listé couvre-t-il le changement, **cas d'erreur** compris ? | 🟠 si rien ne le verrouille, et la convention de test du dépôt est citée si elle existe |
+
+Le reste vient du profil et apparaît dans `facts.md` sous les mêmes numéros : les imports ajoutés dans
+les zones contraintes, les **interdits** du dépôt (la ligne introduit-elle l'API ou la
+construction proscrite, ou la mentionne-t-elle seulement dans un commentaire ou une chaîne ?), les
+fichiers qui vont de pair (un schéma et sa migration), et les vérifications à juger, chacune avec la
+sévérité qu'elle prend une fois confirmée. Une vérification du profil confirmée vaut **au moins** la
+sévérité que le profil lui donne.
 
 ## 6. Filtrer les constats
 
@@ -148,9 +168,9 @@ Un constat entre dans la fiche seulement s'il passe les quatre tests :
 
 Sévérités planchers, quel que soit le reste :
 
-- Entité ou schéma modifié **sans** migration → 🔴 (ADR 0006).
 - Logique métier ou correctif de bug **sans** test → au moins 🟠.
 - Un jumeau identifié, ni corrigé ni signalé → au moins 🟠.
+- Les planchers que le profil attache à ses vérifications (`if_confirmed`).
 
 Puis **s'arrêter à ~10 constats**, du plus grave au moins grave. Une fiche de 40 lignes de style
 enterre le seul bloquant qui compte. Ce que le plafond coupe ne disparaît pas : lisibilité, nommage,
@@ -161,7 +181,7 @@ découpage partent **agrégés** en 1-3 lignes dans `style`.
 Cette relecture est **guidée** par les ADR : c'est sa force et son biais. **Déclencher seulement si un
 critère est rempli** — sur une PR ordinaire et propre, ça ne produit que du bruit :
 
-- **Enjeu** : calculé par `collect.sh` (adapter VLM, persistance, schéma, > 300 lignes).
+- **Enjeu** : calculé par `collect.sh` (zones à enjeu désignées par le profil, > 300 lignes).
 - **Doute** : au moins un constat fini en 💬 faute de vérifiabilité ; un constat écarté sur une
   hypothèse non prouvée du comportement d'un tiers ; verdict 🟢 sans aucun constat sur un diff
   substantiel ; intention indéterminable ; un fichier clé illisible.
@@ -180,17 +200,16 @@ compteurs) est calculé par `render.py` : ne l'y mets pas.
 ```json
 {
   "intention": "ce que la PR cherche à faire, en 1 phrase",
-  "contexts": "apps et libs Nx concernés ; bounded context ou lib partagée",
-  "adr": "ADR réellement relus pour cette review, ex. 0002 · 0006",
-  "schema": "non concerné | entité modifiée AVEC migration | ⚠️ SANS migration",
-  "tests": "N spec(s) ajoutés/modifiés · couvre <quoi> | ⚠️ domaine ou application SANS test",
-  "boundaries": "tags posés · imports conformes | 🔴 import interdit : <path>",
+  "scope": "zones, modules ou contextes concernés",
+  "decisions": "décisions réellement relues pour cette review, ex. ADR 0002 · rule typescript",
+  "tests": "N test(s) ajoutés/modifiés · couvre <quoi> | ⚠️ logique SANS test",
+  "checks": {"<id>": "résultat de la vérification du profil de ce nom, ou « non concerné »"},
   "twins": "aucun | <jumeau : chemin> · corrigé / NON corrigé",
   "second_opinion": "non déclenché | déclenché (<critère>) · N constats · M retenus",
   "summary": "1-2 phrases pour le commentaire : ce que fait la PR + la raison du verdict",
   "findings": [
     {"severity": "blocker", "title": "titre court", "location": "path:line",
-     "breaks": "entrée/état → comportement faux, ou ADR violé", "rule": "ADR 000X (intitulé) ou convention CLAUDE.md",
+     "breaks": "entrée/état → comportement faux, ou décision violée", "rule": "décision citée (ADR, rule, convention)",
      "fix": "la modification, en 1-3 lignes"},
     {"severity": "major", "…": "mêmes champs que blocker"},
     {"severity": "minor", "title": "…", "location": "path:line", "fix": "recommandation en 1 ligne"},
@@ -199,6 +218,9 @@ compteurs) est calculé par `render.py` : ne l'y mets pas.
   "style": ["lisibilité, nommage, découpage — agrégé, 1-3 lignes ; liste vide = rien à signaler"]
 }
 ```
+
+`checks` porte une entrée par `id` de `companions` et de `checks` dans le profil ; `render.py` refuse
+s'il en manque une. Sans profil, l'objet reste vide.
 
 Une ligne sans objet s'écrit `non concerné` plutôt que de s'inventer une préoccupation.
 

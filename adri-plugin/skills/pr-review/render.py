@@ -3,8 +3,8 @@
 
     python3 render.py <workdir>
 
-Reads <workdir>/pr.json (from collect.sh) and <workdir>/review.json (written
-by the reviewer), prints the sheet then the ready-to-paste comment, and writes
+Reads <workdir>/pr.json and <workdir>/profile.json (from collect.sh) and
+<workdir>/review.json (written by the reviewer), prints the sheet then the ready-to-paste comment, and writes
 the comment to <workdir>/comment.md for post.sh.
 
 The judgment is in review.json. What is mechanical lives here: the verdict
@@ -32,13 +32,20 @@ REQUIRED = {
     "minor": ("title", "location", "fix"),
     "question": ("title",),
 }
-FIELDS = ("intention", "contexts", "adr", "schema", "tests", "boundaries", "twins", "second_opinion", "summary")
+FIELDS = ("intention", "scope", "decisions", "tests", "twins", "second_opinion", "summary")
 LOCATION = re.compile(r"^\S+:\d+(-\d+)?$")
 MARKER = "<!-- pr-review -->"
 
 
-def validate(review):
+def profile_checks(profile):
+    """The repo's extra rows of the sheet, in profile order: (id, label)."""
+    return [(c["id"], c["label"]) for c in profile.get("companions", []) + profile.get("checks", []) if c.get("id")]
+
+
+def validate(review, profile):
     problems = [f"champ manquant : {f}" for f in FIELDS if not str(review.get(f, "")).strip()]
+    results = review.get("checks") or {}
+    problems += [f"checks.{i} manquant ({label})" for i, label in profile_checks(profile) if not str(results.get(i, "")).strip()]
     for i, f in enumerate(review.get("findings", []), 1):
         sev = f.get("severity")
         if sev not in SEVERITIES:
@@ -73,7 +80,7 @@ def fence_for(text):
     return "`" * max(3, longest + 1)
 
 
-def sheet(pr, review, findings, icon, label):
+def sheet(pr, review, profile, findings, icon, label):
     draft = " (PR en draft : verdict indicatif)" if pr["isDraft"] else ""
     paths = [f["path"] for f in pr.get("files") or []]
     zones = ", ".join(sorted({zone(p) for p in paths}))
@@ -82,13 +89,12 @@ def sheet(pr, review, findings, icon, label):
         ("Réserves", reserves(findings, with_location=True)),
         ("Intention", review["intention"]),
         ("Périmètre", f"{len(paths)} fichiers · +{pr['additions']}/-{pr['deletions']} lignes · zones : {zones}"),
-        ("Contextes / libs touchés", review["contexts"]),
+        ("Zones touchées", review["scope"]),
         ("Titre Conventional Commits", title_check(pr["title"])),
         ("CI", f"{ci_state(pr.get('statusCheckRollup'))} — read-only, ne colore pas le verdict"),
-        ("ADR confrontés", review["adr"]),
-        ("Schéma / migration", review["schema"]),
+        ("Décisions confrontées", review["decisions"]),
         ("Tests", review["tests"]),
-        ("Frontières Nx", review["boundaries"]),
+        *[(label_, review["checks"][id_]) for id_, label_ in profile_checks(profile)],
         ("Jumeaux", review["twins"]),
         ("Vérifications lancées", "lecture de code + lecture CI (read-only). **Ni lint, ni test, ni build lancés localement.**"),
         ("Second avis à froid", review["second_opinion"]),
@@ -98,7 +104,7 @@ def sheet(pr, review, findings, icon, label):
     out += ["", "### Constats", ""]
 
     if not findings:
-        out = out[:-2] + ["Aucun constat : le diff est conforme aux ADR et conventions confrontés ci-dessus.", ""]
+        out = out[:-2] + ["Aucun constat : le diff est conforme aux décisions et conventions confrontées ci-dessus.", ""]
     n = 0
     for sev, (emoji, heading, _) in SEVERITIES.items():
         group = [f for f in findings if f["severity"] == sev]
@@ -156,7 +162,9 @@ def main():
     workdir = Path(sys.argv[1])
     pr = json.loads((workdir / "pr.json").read_text())
     review = json.loads((workdir / "review.json").read_text())
-    problems = validate(review)
+    profile_file = workdir / "profile.json"
+    profile = json.loads(profile_file.read_text()) if profile_file.exists() else {}
+    problems = validate(review, profile)
     if problems:
         print("review.json invalide :", file=sys.stderr)
         print("\n".join(f"  - {p}" for p in problems), file=sys.stderr)
@@ -172,7 +180,7 @@ def main():
     (workdir / "comment.md").write_text(body)
 
     fence = fence_for(body)
-    print(sheet(pr, review, findings, icon, label))
+    print(sheet(pr, review, profile, findings, icon, label))
     print("\n---\n\n## Commentaire à coller sur la PR\n")
     print(f"{fence}markdown\n{body}{fence}")
 
