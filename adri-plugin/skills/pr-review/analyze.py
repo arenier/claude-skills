@@ -1,36 +1,38 @@
 #!/usr/bin/env python3
-"""Mechanical facts about a PR, from the files collect.sh gathered.
+"""Mechanical facts about a PR (or a branch), from the files collect.sh gathered.
 
     python3 analyze.py <workdir>
 
-Everything here is deterministic: stop conditions, size thresholds, title
-form, CI state, and the profile-driven lookups. Deciding whether a hit is a
-finding is left to the reviewer.
+Everything here is deterministic: stop conditions, size thresholds, title form,
+CI state, which of the repo's own rules apply to which touched path, and the
+grep-level hits for the off-diff checks. Deciding whether a hit is a finding is
+left to the reviewer.
 
-Nothing in this file knows a repository. What is specific to one (which
-decisions govern which paths, which APIs are ruled out, which extra checks to
-run) comes from the repo's own profile, `.claude/pr-review.json`, which
-collect.sh copies to <workdir>/profile.json from the PR's base branch. Without
-a profile the skill still works, on the generic checks only. See
-`PROFILE.md` for the format.
+Nothing in this file knows a repository. The criteria are whatever the reviewed
+repo wrote in its rules (see rules.py); this script only routes the diff to them.
 """
 import json
 import re
-import subprocess
 import sys
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
-CONVENTIONAL = HERE / "../../scripts/conventional.sh"
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rules import route  # noqa: E402
 
-# Generic: how to tell a test file, and a source file, in the usual ecosystems.
-DEFAULT_TESTS = {
-    "source": r"\.(?:[jt]sx?|py|go|rs|rb|java|kt|php|cs)$",
-    "test": r"(?:[._]|^|/)(?:spec|test)s?[._/]|(?:^|/)(?:tests?|__tests__)/|_test\.go$",
-}
+TITLE_SHAPE = re.compile(r"^[a-z]+(\([^)]+\))?!?: \S.*$")
 FAILING = {"FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "ERROR"}
 PENDING = {"PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED"}
-IMPORT = re.compile(r"""^\s*(?:import\b.*?from\s*|import\s*|export\b.*?from\s*|from\s+\S+\s+import\b)['"]?([^'"\s]+)['"]?|require\(\s*['"]([^'"]+)['"]\s*\)""")
+TEST_FILE = re.compile(r"(?:[._]|^|/)(?:spec|test)s?[._/]|(?:^|/)(?:tests?|__tests__)/|_test\.go$")
+SOURCE_FILE = re.compile(r"\.(?:[jt]sx?|py|go|rs|rb|java|kt|php|cs)$")
+MIGRATION = re.compile(r"(?i)migration")
+SCHEMA = re.compile(r"(?i)(entit(y|ies)|schema|\.model\.|/models?/|\.prisma$|\.sql$)")
+CATALOG = re.compile(r"(?i)(^|/)(locales?|i18n|translations?|messages?|lang)(/|\.)|\.(po|xlf|arb)$")
+ACCESS = re.compile(r"(?i)(auth|guard|permission|policy|acl|rbac|sso|realm)")
+DESTRUCTIVE = re.compile(r"(?i)\b(DROP\s+(TABLE|COLUMN)|ALTER\s+TYPE|TRUNCATE|deleteAll|DELETE\s+FROM)\b")
+LOCK_WORDS = re.compile(r"(?i)(interdit|verrouill|forbidden|locked|lock\b|ne pas utiliser|never use|must not)")
+PERF_WORDS = re.compile(r"(?i)(n\+1|dataloader|batch|performance|perf\b|over-?fetch)")
+TENANT_WORDS = re.compile(r"(?i)(tenant|multi-?tenan|customerId|organi[sz]ationId|workspaceId)")
 
 
 def added_lines(patch):
@@ -51,7 +53,7 @@ def added_lines(patch):
 
 
 def zone(path):
-    """Top-level area of a path: `dir/sub` under apps/ and libs/ style roots, else `dir`."""
+    """Top-level area of a path: `dir/sub` under monorepo-style roots, else `dir`."""
     parts = path.split("/")
     if len(parts) > 2 and parts[0] in ("apps", "libs", "packages", "services", "plugins"):
         return f"{parts[0]}/{parts[1]}"
@@ -75,181 +77,163 @@ def ci_state(rollup):
     return "en attente" if pending else "verte"
 
 
-def title_check(title):
-    r = subprocess.run([str(CONVENTIONAL), title], capture_output=True, text=True)
-    if r.returncode == 0:
-        return "conforme (forme) — l'impératif reste à juger"
-    return "⚠️ non conforme : " + " · ".join(r.stdout.split("\n")).strip(" ·")
-
-
-def tracked_files():
-    r = subprocess.run(["git", "ls-files"], capture_output=True, text=True)
-    return r.stdout.splitlines() if r.returncode == 0 else []
+def title_check(title, commitlint):
+    """Shape only. The type and scope enums are the repo's own (its commitlint config)."""
+    shape = "forme `type(scope): sujet` respectée" if TITLE_SHAPE.match(title) else "⚠️ forme `type(scope): sujet` non respectée"
+    if commitlint:
+        return f"{shape} · config `{commitlint[0]}` à lire pour l'enum de types et de scopes"
+    return f"{shape} · pas de commitlint dans ce repo : forme seule vérifiée"
 
 
 def main():
     workdir = Path(sys.argv[1])
     pr = json.loads((workdir / "pr.json").read_text())
     patch = (workdir / "diff.patch").read_text()
-    profile_file = workdir / "profile.json"
-    profile = json.loads(profile_file.read_text()) if profile_file.exists() else {}
     default_branch = (workdir / "default_branch").read_text().strip() if (workdir / "default_branch").exists() else "main"
+    local = pr.get("number") is None
 
     files = pr.get("files") or []
     paths = [f["path"] for f in files]
     size = pr["additions"] + pr["deletions"]
     added = list(added_lines(patch))
+    routed, everywhere, meta = route(workdir, paths)
     out = []
     w = out.append
 
-    w(f"# Faits mécaniques — PR #{pr['number']} · {pr['title']}\n")
+    subject = f"branche `{pr['headRefName']}` vs `{default_branch}`" if local else f"PR #{pr['number']} · {pr['title']}"
+    w(f"# Faits mécaniques — {subject}\n")
 
     w("## Arrêts et signalements\n")
     author = (pr.get("author") or {}).get("login", "")
     labels = {label["name"].lower() for label in pr.get("labels") or []}
-    stops = []
-    if pr["state"] != "OPEN":
+    stops, notes = [], []
+    if not local and pr["state"] != "OPEN":
         stops.append(f"STOP : PR à l'état {pr['state']}, rien à relire.")
     if "dependabot" in author.lower() or labels & {"dependencies", "dependabot"}:
         stops.append("STOP : PR Dependabot, hors périmètre de ce skill. Le dire, sans fiche.")
-    notes = []
     if pr["isDraft"]:
         notes.append("Draft : verdict indicatif.")
-    if pr["baseRefName"] != default_branch:
+    if not local and pr["baseRefName"] != default_branch:
         notes.append(f"Base `{pr['baseRefName']}` ≠ `{default_branch}` : PR empilée, le diff peut inclure la PR parente.")
-    if not profile:
-        notes.append("Aucun profil `.claude/pr-review.json` sur la base : seules les vérifications génériques s'appliquent. "
-                     "Les conventions du dépôt se découvrent à la lecture (étape 3).")
+    if not meta["rules"] and not meta.get("indexes"):
+        notes.append("Aucune règle écrite trouvée sur la base (ni `.claude/rules/**`, ni `.github/instructions/**`, ni `CLAUDE.md`) : "
+                     "relecture sur l'intention, le titre et les catégories génériques seulement. Le dire dans la fiche.")
     for line in stops + notes or ["Aucun."]:
         w(f"- {line}")
 
     w("\n## Taille et déclencheurs\n")
     zones = sorted({zone(p) for p in paths})
-    w(f"- Périmètre : {len(paths)} fichiers · +{pr['additions']}/-{pr['deletions']} lignes · zones : {', '.join(zones)}")
+    w(f"- Périmètre : {len(paths)} fichiers · +{pr['additions']}/-{pr['deletions']} lignes · zones : {', '.join(zones) or 'aucune'}")
     w("- Lecture : " + ("fichier par fichier (> 2000 lignes)" if size > 2000 else "d'un bloc"))
-    fan_out = len(paths) > 40 or size > 2500
-    w(f"- Fan-out : {'à PROPOSER (> 40 fichiers ou > 2500 lignes), attendre le go' if fan_out else 'non (relecture inline)'}")
-    stakes_re = profile.get("stakes")
-    stakes = [p for p in paths if stakes_re and re.search(stakes_re, p)]
-    reasons = []
-    if stakes:
-        reasons.append(f"touche {', '.join(f'`{p}`' for p in stakes[:5])}{' …' if len(stakes) > 5 else ''}")
-    if size > 300:
-        reasons.append(f"{size} lignes (> 300)")
-    w(f"- Second avis, critère d'enjeu : {'rempli — ' + ' ; '.join(reasons) if reasons else 'non rempli'} (le critère de doute reste à juger)")
+    volume = len(paths) > 40 or size > 2500
+    w(f"- Fan-out : {'à PROPOSER (> 40 fichiers ou > 2500 lignes), attendre le go' if volume else 'non (relecture inline)'}")
+    w("- Second avis, critères d'enjeu candidats (à confirmer par les règles du repo, ceux de doute restent à juger) :")
+    hints = []
+    if volume:
+        hints.append("volume (> 40 fichiers ou > 2500 lignes)")
+    access = [p for p in paths if ACCESS.search(p)]
+    if access:
+        hints.append("accès / permissions : " + ", ".join(f"`{p}`" for p in access[:4]))
+    destructive = sorted({f"`{p}:{n}`" for p, n, t in added if DESTRUCTIVE.search(t)})
+    if destructive:
+        hints.append("écriture destructive : " + ", ".join(destructive[:4]))
+    migrations = [p for p in paths if MIGRATION.search(p)]
+    if migrations and not destructive:
+        hints.append("migration touchée")
+    for h in hints or ["aucun"]:
+        w(f"  - {h}")
 
-    if profile.get("notes"):
-        w("\n## Notes du dépôt\n")
-        w(profile["notes"])
-
-    w("\n## Titre Conventional Commits\n")
-    w(f"- {title_check(pr['title'])}")
+    w("\n## Titre\n")
+    w(f"- {title_check(pr['title'], meta.get('commitlint'))}")
 
     w("\n## CI (read-only, ne colore pas le verdict)\n")
     w(f"- {ci_state(pr.get('statusCheckRollup'))}")
 
-    w("\n## Décisions à confronter\n")
-    index = profile.get("index") or ["CLAUDE.md", "AGENTS.md"]
-    w(f"Toujours, s'ils existent : {', '.join(f'`{i}`' for i in index)}.")
-    if profile.get("decisions"):
-        w(f"Décisions actées : `{profile['decisions']}/`.")
-    if profile.get("rules"):
-        w(f"Rules : `{profile['rules']}/` — une rule dont le frontmatter `paths` cible un fichier du diff s'applique à ce fichier.")
-    routes = profile.get("routes") or []
-    if routes:
-        w("\n| Fichier | À confronter |\n|---|---|")
-        refs = set()
+    w("\n## Règles du dépôt à confronter\n")
+    w("Source : la branche de base, jamais la branche relue. Ce sont **elles** les critères ; rien d'autre n'est reproché.\n")
+    if meta.get("indexes"):
+        w(f"- Index : {', '.join(f'`{i}`' for i in meta['indexes'])}")
+    if meta["rules"]:
+        w(f"- Règles lues sur la base ({len(meta['rules'])}) : {', '.join(f'`{r}`' for r in meta['rules'])}")
+        if everywhere:
+            w(f"- Sans `paths` (valent partout) : {', '.join(f'`{r}`' for r in everywhere)}")
+        w("\n| Fichier touché | Règles qui s'y appliquent |\n|---|---|")
         for p in paths:
-            hits = [r for r in routes if re.search(r["paths"], p)]
-            for r in hits:
-                refs.update(r.get("refs") or [])
-            w(f"| `{p}` | {' · '.join(r['read'] for r in hits) if hits else '—'} |")
-        w(f"\nÀ lire : {', '.join(sorted(refs)) or 'aucun routé'}")
+            w(f"| `{p}` | {', '.join(f'`{r}`' for r in routed[p]) or '—'} |")
     else:
-        w("\nPas de routage chemin → décision : lire l'index puis chercher les décisions qui concernent les zones touchées.")
+        w("- Aucune règle `.claude/rules/**` ni `.github/instructions/**`.")
+    if meta.get("docs"):
+        w("")
+        w(f"- Docs liés par l'index ou les règles, lus aussi sous `{workdir}/rules/` ({len(meta['docs'])}) : "
+          + ", ".join(f"`{d}`" for d in meta["docs"][:12]) + (" …" if len(meta["docs"]) > 12 else ""))
+    if meta.get("skipped_docs"):
+        w(f"- ⚠️ {meta['skipped_docs']} doc(s) lié(s) non récupérés (plafond) : lire à la demande sur la base.")
 
-    for req in profile.get("required", []):
-        for f in files:
-            p = f["path"]
-            if re.search(req["paths"], p):
-                head = workdir / "head" / p
-                if not (head.exists() and req["contains"] in head.read_text()):
-                    w(f"\n⚠️ `{p}` : {req['label']}")
+    rule_texts = {r: (workdir / "rules" / r).read_text() for r in meta["rules"]}
+    def mentioning(rx):
+        return [r for r, text in rule_texts.items() if rx.search(text)]
 
     w("\n## Vérifications hors-diff (résultats bruts, à juger)\n")
-    n = 0
+    w("Chacune ne s'applique que si les règles du repo la rendent pertinente ; la fiche dit ce qu'elle a donné, y compris « rien ».\n")
 
-    zones_re = profile.get("import_zones")
-    if zones_re:
-        n += 1
-        w(f"### {n}. Imports ajoutés dans les zones contraintes\n")
-        hits = []
-        for p, ln, text in added:
-            if re.search(zones_re, p):
-                m = IMPORT.search(text)
-                if m:
-                    hits.append(f"- `{p}:{ln}` → `{m.group(1) or m.group(2)}`")
-        w("\n".join(hits) or "rien")
-        w("")
+    w("### 1. Jumeaux (fix-twins)\n")
+    twins = [r for r in rule_texts if re.search(r"(?i)twin|jumeau", r + rule_texts[r][:400])]
+    w(f"Règle du repo : {', '.join(f'`{r}`' for r in twins) if twins else 'aucune (pas de règle fix-twins)'}")
+    w("jugement : chercher la **signature** du défaut corrigé dans tout le repo (`grep -rn`), auditer chaque appelant de la méthode corrigée.\n")
 
-    n += 1
-    w(f"### {n}. Jumeaux\n")
-    w("jugement : chercher la signature du défaut corrigé dans tout le repo (`grep -rn`).\n")
-
-    n += 1
-    w(f"### {n}. Tests des fichiers source touchés\n")
-    tests = {**DEFAULT_TESTS, **(profile.get("tests") or {})}
-    test_files = {p for p in paths if re.search(tests["test"], p)}
-    local = [t for t in tracked_files() if re.search(tests["test"], t)]
+    w("### 2. Comportement verrouillé par un test ?\n")
+    test_files = {p for p in paths if TEST_FILE.search(p)}
     rows = []
     for p in paths:
-        if not re.search(tests["source"], p) or p in test_files:
+        if not SOURCE_FILE.search(p) or p in test_files:
             continue
         base = Path(p).name.split(".")[0]
-        touched = any(base in Path(t).name for t in test_files)
-        existing = any(base in Path(t).name for t in local)
-        rows.append(f"- `{p}` — test touché : {'oui' if touched else 'non'} · test existant (checkout local) : {'oui' if existing else 'non'}")
+        rows.append(f"- `{p}` — test touché : {'oui' if any(base in Path(t).name for t in test_files) else 'non'}")
     w("\n".join(rows) or "aucun fichier source touché")
+    w("\njugement : le test couvre-t-il le changement, **cas d'erreur** compris ? Chercher aussi la spec du fichier et de ses appelants.\n")
+
+    w("### 3. Schéma / entité ↔ migration\n")
+    schema = [p for p in paths if SCHEMA.search(p) and not MIGRATION.search(p)]
+    w(f"- Schéma / entités candidats : {', '.join(f'`{p}`' for p in schema) or 'aucun'}")
+    w(f"- Migrations touchées : {', '.join(f'`{p}`' for p in migrations) or 'aucune'}")
+    w("- S'applique seulement si les règles du repo disent qu'il **écrit ses migrations** (un schéma vendoré n'en a pas : le dire).")
+    if schema and not migrations:
+        w("- ⚠️ schéma touché SANS migration dans le diff → 🔴 si le repo écrit ses migrations")
     w("")
 
-    locked = profile.get("locked") or []
-    if locked:
-        n += 1
-        w(f"### {n}. Interdits du dépôt (lignes ajoutées)\n")
-        hits = []
-        for p, ln, text in added:
-            for rule in locked:
-                if rule.get("paths") and not re.search(rule["paths"], p):
-                    continue
-                if rule.get("ignore") and re.search(rule["ignore"], text.strip()):
-                    continue
-                if re.search(rule["pattern"], text):
-                    hits.append(f"- `{p}:{ln}` — {rule['label']} — `{text.strip()[:100]}`")
-        w("\n".join(hits) or "rien")
-        w("")
+    w("### 4. Clé de tenant dans chaque branche\n")
+    tenant = mentioning(TENANT_WORDS)
+    w(f"Règles qui parlent de tenant : {', '.join(f'`{r}`' for r in tenant) if tenant else 'aucune → non concerné'}")
+    if tenant:
+        w("jugement : après tout refactor de `WHERE` / `OR`, lire la méthode entière, et les lectures voisines du même service.")
+    w("")
 
-    for pair in profile.get("companions", []):
-        n += 1
-        w(f"### {n}. {pair['label']}\n")
-        changed = [p for p in paths if re.search(pair["changed"], p) and not (pair.get("except") and re.search(pair["except"], p))]
-        companions = [p for p in paths if re.search(pair["companion"], p)]
-        w(f"- Touchés : {', '.join(f'`{p}`' for p in changed) or 'aucun'}")
-        w(f"- Accompagnement : {', '.join(f'`{p}`' for p in companions) or 'aucun'}")
-        if changed and not companions:
-            w(f"- ⚠️ {pair['warning']}")
-        if pair.get("judge"):
-            w(f"\njugement : {pair['judge']}")
-        if pair.get("if_confirmed"):
-            w(f"Si confirmé : {pair['if_confirmed']}")
-        w("")
+    w("### 5. API verrouillée ou interdite introduite\n")
+    locks = mentioning(LOCK_WORDS)
+    w(f"Règles qui verrouillent ou interdisent : {', '.join(f'`{r}`' for r in locks) if locks else 'aucune → non concerné'}")
+    if locks:
+        w("jugement : lire la liste **dans la règle**, puis `grep` les lignes ajoutées du diff pour ces API exactes. "
+          "La ligne introduit-elle l'API, ou la mentionne-t-elle (commentaire, chaîne) ?")
+    w("")
 
-    for check in profile.get("checks", []):
-        n += 1
-        w(f"### {n}. {check['label']}\n")
-        w(f"jugement : {check['judge']}")
-        if check.get("if_confirmed"):
-            w(f"Si confirmé : {check['if_confirmed']}")
-        w("")
+    w("### 6. Performance / chargement de données\n")
+    perf = mentioning(PERF_WORDS)
+    w(f"Règles de performance : {', '.join(f'`{r}`' for r in perf) if perf else 'aucune → non concerné'}")
+    if perf:
+        w("jugement : `grep` le batch / loader existant avant d'en exiger un nouveau.")
+    w("")
+
+    w("### 7. Réutilisation plutôt que duplication (catalogues de messages)\n")
+    cat_hits = [(p, n, t) for p, n, t in added if CATALOG.search(p) and t.strip()]
+    if cat_hits:
+        for p, n, t in cat_hits[:40]:
+            w(f"- `{p}:{n}` — `{t.strip()[:110]}`")
+        if len(cat_hits) > 40:
+            w(f"- … +{len(cat_hits) - 40} autres lignes")
+        w("\njugement : pour chaque clé ajoutée, `grep` sa **valeur** (et ses variantes de casse / ponctuation) dans les catalogues ; "
+          "la même clé définie deux fois dans un catalogue masque l'autre (🟠) ; un nouveau terme qui en duplique un (🟡).")
+    else:
+        w("aucun catalogue de messages touché")
 
     print("\n".join(out))
 
