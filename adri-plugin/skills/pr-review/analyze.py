@@ -19,15 +19,19 @@ from pathlib import Path
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from rules import route  # noqa: E402
+from rules import frontmatter_globs, matches, route  # noqa: E402
 
 TITLE_SHAPE = re.compile(r"^[a-z]+(\([^)]+\))?!?: \S.*$")
 FAILING = {"FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "ERROR"}
 PENDING = {"PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED"}
-TEST_FILE = re.compile(r"(?:[._]|^|/)(?:spec|test)s?[._/]|(?:^|/)(?:tests?|__tests__)/|_test\.go$")
+# A test is a code file named like one (`x.spec.ts`, `x_test.go`, `test_x.py`) or under a test
+# directory. A `specs/` directory is not one: a feature spec (Spec Kit) is prose.
+TEST_FILE = re.compile(r"[._](?:spec|test)s?\.|(?:^|/)test_[^/]*\.py$|(?:^|/)(?:tests?|__tests__)/|_test\.go$")
 SOURCE_FILE = re.compile(r"\.(?:[jt]sx?|py|go|rs|rb|java|kt|php|cs)$")
 MIGRATION = re.compile(r"(?i)migration")
-SCHEMA = re.compile(r"(?i)(entit(y|ies)|schema|\.model\.|/models?/|\.prisma$|\.sql$)")
+SCHEMA = re.compile(r"(?i)(entit(y|ies)|schema|\.model\.|\.prisma$|\.sql$)")
+SOURCE_OR_SQL = re.compile(r"\.(?:[jt]sx?|py|go|rs|rb|java|kt|php|cs|sql|prisma)$")
+LOCK_STOPLIST = {"main", "master", "true", "false", "null"}
 CATALOG = re.compile(r"(?i)(^|/)(locales?|i18n|translations?|messages?|lang)(/|\.)|\.(po|xlf|arb)$")
 ACCESS = re.compile(r"(?i)(auth|guard|permission|policy|acl|rbac|sso|realm)")
 DESTRUCTIVE = re.compile(r"(?i)\b(DROP\s+(TABLE|COLUMN)|ALTER\s+TYPE|TRUNCATE|deleteAll|DELETE\s+FROM)\b")
@@ -55,6 +59,41 @@ def added_lines(patch):
             line += 1
         elif path and raw.startswith(" "):
             line += 1
+
+
+def is_test(path):
+    return bool(TEST_FILE.search(path)) and bool(SOURCE_FILE.search(path))
+
+
+def lock_tokens(text):
+    """The words a rule forbids: backticked words that come AFTER a prohibition on the same line.
+
+    `jamais STORAGE_EMULATOR_HOST` forbids the word after `jamais`, not the one before it.
+    Commands (with a space), paths and prose words are not API names; code fences are skipped.
+    """
+    tokens, in_fence = set(), False
+    for line in text.splitlines():
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+            continue
+        m = None if in_fence else LOCK_WORDS.search(line)
+        if not m:
+            continue
+        for tok in BACKTICK.findall(line[m.end():]):
+            if len(tok) >= 3 and not re.search(r"\s|/|\.md$", tok) and tok.lower() not in LOCK_STOPLIST:
+                tokens.add(tok)
+    return tokens
+
+
+def is_everyday_word(token, limit=5):
+    """A word that already runs through the repo's own code is a name or prose, not a forbidden API.
+
+    A forbidden API is by definition absent (or rare) in the code that passed review. `application`
+    appears in dozens of files; `webpack`, in none. Without a git checkout, nothing is filtered.
+    """
+    r = subprocess.run(["git", "grep", "-l", "-w", "-F", "-e", token, "--", ".", ":!*.md", ":!*.txt"],
+                       capture_output=True, text=True)
+    return r.returncode == 0 and len(r.stdout.splitlines()) > limit
 
 
 def norm(value):
@@ -242,8 +281,8 @@ def main():
     w("jugement : déduire la **signature** du défaut corrigé (aucun script ne la connaît), puis la `grep` dans tout le repo et auditer chaque appelant.\n")
 
     w("### 2. Comportement verrouillé par un test ?\n")
-    test_files = {p for p in paths if TEST_FILE.search(p)}
-    local_tests = [t for t in tracked_files() if TEST_FILE.search(t) and t not in test_files]
+    test_files = {p for p in paths if is_test(p)}
+    local_tests = [t for t in tracked_files() if is_test(t) and t not in test_files]
     rows = []
     for p in paths:
         if not SOURCE_FILE.search(p) or p in test_files:
@@ -264,7 +303,7 @@ def main():
     w("\njugement : le test couvre-t-il le changement, **cas d'erreur** compris ? (Les specs existantes sont lues dans le checkout courant : identiques à la PR pour tout fichier non touché.)\n")
 
     w("### 3. Schéma / entité ↔ migration\n")
-    schema = [p for p in paths if SCHEMA.search(p) and not MIGRATION.search(p)]
+    schema = [p for p in paths if SCHEMA.search(p) and not MIGRATION.search(p) and SOURCE_OR_SQL.search(p) and not is_test(p)]
     w(f"- Schéma / entités candidats : {', '.join(f'`{p}`' for p in schema) or 'aucun'}")
     w(f"- Migrations touchées : {', '.join(f'`{p}`' for p in migrations) or 'aucune'}")
     w("- S'applique seulement si les règles du repo disent qu'il **écrit ses migrations** (un schéma vendoré n'en a pas : le dire).")
@@ -294,16 +333,18 @@ def main():
     if locks:
         hits = []
         for r in locks:
-            tokens = sorted({k for line in rule_texts[r].splitlines() if LOCK_WORDS.search(line) for k in BACKTICK.findall(line) if len(k) >= 3})
-            for tok in tokens:
-                pat = re.compile(r"(?<![\w.])" + re.escape(tok) + r"(?![\w])")
+            for tok in sorted(lock_tokens(rule_texts[r])):
+                if is_everyday_word(tok):
+                    continue
+                pat = re.compile(r"(?<![\w/@-])" + re.escape(tok) + r"(?![\w/-])")
+                scope = frontmatter_globs(rule_texts[r])  # a rule only forbids within the paths it governs
                 for p, n, text in added:
-                    if pat.search(text):
+                    if pat.search(text) and not p.endswith((".md", ".txt")) and (not scope or matches(scope, p)):
                         hits.append(f"- `{p}:{n}` — `{tok}` (cité par `{r}`) — `{text.strip()[:90]}`")
         w("\n".join(hits[:30]) or "aucune API citée comme interdite par ces règles n'apparaît dans les lignes ajoutées")
         if len(hits) > 30:
             w(f"- … +{len(hits) - 30} autres")
-        w("jugement : les mots entre backticks des lignes d'interdit sont cherchés tels quels ; la ligne introduit-elle l'API, ou la mentionne-t-elle (commentaire, chaîne) ? Lire aussi la règle pour les interdits qu'aucun mot ne désigne.")
+        w("jugement : les mots entre backticks qui suivent un interdit dans les règles sont cherchés tels quels ; la ligne introduit-elle l'API, ou la mentionne-t-elle (commentaire, chaîne) ? Lire aussi la règle pour les interdits qu'aucun mot ne désigne.")
     w("")
 
     w("### 6. Performance / chargement de données\n")
