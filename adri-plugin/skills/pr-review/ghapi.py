@@ -15,6 +15,7 @@ credentials), the token otherwise. Writing is a separate decision made by the
 caller: `api(..., transport="token")` forces the token, which is how a routine
 posts as `claude[bot]` rather than as a person.
 """
+import functools
 import json
 import os
 import re
@@ -37,6 +38,7 @@ def token():
     return os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or ""
 
 
+@functools.lru_cache(maxsize=1)
 def has_gh():
     if os.environ.get("PR_REVIEW_TRANSPORT") == "token" or not shutil.which("gh"):
         return False

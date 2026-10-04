@@ -129,8 +129,8 @@ python3 ${CLAUDE_SKILL_DIR}/post-auto.py <PR#> <WORKDIR>         # re-vérifie l
 - `dedup.py` applique la déduplication par SHA du marqueur `<!-- pr-review-auto: SHA -->` : sans label
   `claude`, une review par SHA ; avec le label (une demande explicite), une nouvelle review au-delà de
   10 minutes, la fenêtre ne servant qu'à écarter les livraisons concurrentes d'un même événement.
-- `post-auto.py` **exige** le token ambiant et ne retombe jamais sur `gh` : la review doit être
-  identifiable comme automatique. Il refuse un commentaire dont le marqueur n'est pas au SHA relu, ou
+- `post-auto.py` **exige** un token d'installation (`ghs_…`) et ne retombe jamais sur `gh` : la review doit
+  être identifiable comme automatique. Un token de personne (`ghu_…`, `ghp_…`) est refusé, code 11. Il refuse un commentaire dont le marqueur n'est pas au SHA relu, ou
   une PR qui a avancé depuis. Il ne poste qu'un commentaire : ni review, ni merge, ni label.
 
 ## 2. Établir l'intention

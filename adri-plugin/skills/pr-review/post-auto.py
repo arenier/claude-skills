@@ -13,8 +13,13 @@ being written. It refuses when:
   - the comment does not end with `<!-- pr-review-auto: SHA -->` at the SHA that was
     reviewed (pr.json), or the PR head has moved since (the review is stale).
 
+It also refuses a token that is not an installation token (`ghs_…`): a user-to-server
+(`ghu_…`) or personal token (`ghp_…`, `github_pat_…`) would sign the review as a person.
+Exit code 11; `PR_REVIEW_ALLOW_USER_TOKEN=1` lifts it for a manual test.
+
 It posts one comment and nothing else: no review, no merge, no label.
 """
+import os
 import re
 import sys
 from pathlib import Path
@@ -31,6 +36,10 @@ def main():
     number, workdir = sys.argv[1], Path(sys.argv[2])
     if not token():
         sys.exit("refus : GITHUB_TOKEN / GH_TOKEN absent. La review doit être postée sous l'identité du token ambiant (claude[bot]), jamais sous celle d'une personne.")
+    if not token().startswith("ghs_") and os.environ.get("PR_REVIEW_ALLOW_USER_TOKEN") != "1":
+        print("refus : le token ambiant n'est pas un token d'installation (ghs_…) : la review serait signée par une personne. "
+              "Rien n'est posté, et aucun autre canal d'écriture n'est à tenter.", file=sys.stderr)
+        sys.exit(11)
     body = (workdir / "comment.md").read_text()
     reviewed = json.loads((workdir / "pr.json").read_text())["headRefOid"]
     last = [line for line in body.splitlines() if line.strip()][-1]
@@ -46,7 +55,10 @@ def main():
         sys.exit(10)
 
     posted = api(f"repos/{{owner}}/{{repo}}/issues/{number}/comments", method="POST", data={"body": body}, transport="token")
-    print(f"auteur={posted['user']['login']}")
+    login = posted["user"]["login"]
+    print(f"auteur={login}")
+    if not login.endswith("[bot]"):
+        print(f"⚠️ commentaire posté sous `{login}`, pas sous une identité de bot : à signaler dans le rapport.", file=sys.stderr)
     print(f"url={posted['html_url']}")
 
 
