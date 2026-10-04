@@ -79,8 +79,8 @@ optionnel `.claude/pr-review.json` les complète (format dans
 [`PROFILE.md`](adri-plugin/skills/pr-review/PROFILE.md)). `pr-review-triage` et
 `create-pr` restent écrits pour [pick-a-book](https://github.com/arenier/pick-a-book).
 
-La relecture tourne aussi en routine cloud, sur chaque PR d'un dépôt branché : voir
-[`routines/pr-review/`](routines/pr-review/README.md).
+Une routine cloud peut l'appliquer à chaque PR : le prompt de la routine reste dans le dépôt
+relu, qui lit ce skill sur la `main` d'`arenier/claude-skills`.
 
 | Skill | Rôle |
 |---|---|
