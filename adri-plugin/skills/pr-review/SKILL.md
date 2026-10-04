@@ -304,7 +304,7 @@ sur une PR ordinaire et propre, ça ne produit que du bruit.
 
 **Lancer : proposer et attendre le go**, comme le fan-out. Annoncer le ou les critères déclenchés, puis
 lancer sur accord. Un sous-agent `general-purpose`, en avant-plan (son résultat est nécessaire avant le
-verdict). **Son prompt vient de `${CLAUDE_SKILL_DIR}/blind-prompt.sh <PR#>`**, ne pas le réécrire : le script
+verdict). **Son prompt vient de `${CLAUDE_SKILL_DIR}/blind-prompt.sh <PR#> <WORKDIR>`** (qui copie dans `WORKDIR/blind/` le diff, les fichiers en version PR et la description de l'auteur, sans `facts.md`, `review.json` ni règles : l'agent n'a besoin d'aucun accès GitHub), ne pas le réécrire : le script
 garantit l'**aveuglement** par construction, et il fixe :
 
 - lui donner **le numéro de PR seul** : jamais tes constats, jamais ton verdict, jamais un axe à
