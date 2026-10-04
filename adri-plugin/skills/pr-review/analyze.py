@@ -1,18 +1,15 @@
 #!/usr/bin/env python3
-"""Mechanical facts about a PR, from the files collect.sh gathered.
+"""Mechanical facts about a PR (or a branch), from the files collect.sh gathered.
 
     python3 analyze.py <workdir>
 
-Everything here is deterministic: stop conditions, size thresholds, title
-form, CI state, and the profile-driven lookups. Deciding whether a hit is a
-finding is left to the reviewer.
+Everything here is deterministic: stop conditions, size thresholds, title form,
+CI state, which of the repo's own rules apply to which touched path, and the
+grep-level hits for the off-diff checks. Deciding whether a hit is a finding is
+left to the reviewer.
 
-Nothing in this file knows a repository. What is specific to one (which
-decisions govern which paths, which APIs are ruled out, which extra checks to
-run) comes from the repo's own profile, `.claude/pr-review.json`, which
-collect.sh copies to <workdir>/profile.json from the PR's base branch. Without
-a profile the skill still works, on the generic checks only. See
-`PROFILE.md` for the format.
+Nothing in this file knows a repository. The criteria are whatever the reviewed
+repo wrote in its rules (see rules.py); this script only routes the diff to them.
 """
 import json
 import re
@@ -20,17 +17,27 @@ import subprocess
 import sys
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
-CONVENTIONAL = HERE / "../../scripts/conventional.sh"
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rules import route  # noqa: E402
 
-# Generic: how to tell a test file, and a source file, in the usual ecosystems.
-DEFAULT_TESTS = {
-    "source": r"\.(?:[jt]sx?|py|go|rs|rb|java|kt|php|cs)$",
-    "test": r"(?:[._]|^|/)(?:spec|test)s?[._/]|(?:^|/)(?:tests?|__tests__)/|_test\.go$",
-}
+TITLE_SHAPE = re.compile(r"^[a-z]+(\([^)]+\))?!?: \S.*$")
 FAILING = {"FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "ERROR"}
 PENDING = {"PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED"}
-IMPORT = re.compile(r"""^\s*(?:import\b.*?from\s*|import\s*|export\b.*?from\s*|from\s+\S+\s+import\b)['"]?([^'"\s]+)['"]?|require\(\s*['"]([^'"]+)['"]\s*\)""")
+TEST_FILE = re.compile(r"(?:[._]|^|/)(?:spec|test)s?[._/]|(?:^|/)(?:tests?|__tests__)/|_test\.go$")
+SOURCE_FILE = re.compile(r"\.(?:[jt]sx?|py|go|rs|rb|java|kt|php|cs)$")
+MIGRATION = re.compile(r"(?i)migration")
+SCHEMA = re.compile(r"(?i)(entit(y|ies)|schema|\.model\.|/models?/|\.prisma$|\.sql$)")
+CATALOG = re.compile(r"(?i)(^|/)(locales?|i18n|translations?|messages?|lang)(/|\.)|\.(po|xlf|arb)$")
+ACCESS = re.compile(r"(?i)(auth|guard|permission|policy|acl|rbac|sso|realm)")
+DESTRUCTIVE = re.compile(r"(?i)\b(DROP\s+(TABLE|COLUMN)|ALTER\s+TYPE|TRUNCATE|deleteAll|DELETE\s+FROM)\b")
+LOCK_WORDS = re.compile(r"(?i)(interdit|verrouill|forbidden|locked|lock\b|ne pas utiliser|never use|must not|\bpas de\b|\bjamais\b|\bni\b|\bnever\b)")
+PERF_WORDS = re.compile(r"(?i)(n\+1|dataloader|batch|performance|perf\b|over-?fetch)")
+TENANT_WORDS = re.compile(r"(?i)(tenant|multi-?tenan|customerId|organi[sz]ationId|workspaceId)")
+BACKTICK = re.compile(r"`([^`\n]+)`")
+WHERE = re.compile(r"(?i)(\.where\(|\.andWhere\(|\.orWhere\(|\bWHERE\b|\bwhere:)")
+LOOPING = re.compile(r"Promise\.all\(|\.(?:forEach|map)\(\s*async|for\s*\(.*\bof\b|for\s+await|while\s*\(")
+KV = re.compile(r'^\s*["\']?([\w.\-]+)["\']?\s*[:=]\s*["\'](.*?)["\'],?\s*$')
 
 
 def added_lines(patch):
@@ -50,8 +57,37 @@ def added_lines(patch):
             line += 1
 
 
+def norm(value):
+    """Catalog values compared without case, surrounding space or trailing punctuation."""
+    return re.sub(r"[\s.!?:;…]+$", "", value.strip().casefold())
+
+
+def json_duplicate_keys(text):
+    """Keys defined twice in the same JSON object: the last one silently wins."""
+    dups = []
+
+    def hook(pairs):
+        seen = set()
+        for k, _ in pairs:
+            if k in seen:
+                dups.append(k)
+            seen.add(k)
+        return dict(pairs)
+
+    try:
+        json.loads(text, object_pairs_hook=hook)
+    except ValueError:
+        pass
+    return dups
+
+
+def tracked_files():
+    r = subprocess.run(["git", "ls-files"], capture_output=True, text=True)
+    return r.stdout.splitlines() if r.returncode == 0 else []
+
+
 def zone(path):
-    """Top-level area of a path: `dir/sub` under apps/ and libs/ style roots, else `dir`."""
+    """Top-level area of a path: `dir/sub` under monorepo-style roots, else `dir`."""
     parts = path.split("/")
     if len(parts) > 2 and parts[0] in ("apps", "libs", "packages", "services", "plugins"):
         return f"{parts[0]}/{parts[1]}"
@@ -75,181 +111,246 @@ def ci_state(rollup):
     return "en attente" if pending else "verte"
 
 
-def title_check(title):
-    r = subprocess.run([str(CONVENTIONAL), title], capture_output=True, text=True)
-    if r.returncode == 0:
-        return "conforme (forme) — l'impératif reste à juger"
-    return "⚠️ non conforme : " + " · ".join(r.stdout.split("\n")).strip(" ·")
+def ci_for(pr):
+    """The CI field of the sheet, honest about a state that could not be read."""
+    if pr.get("ciError"):
+        return f"non lisible ({pr['ciError'][:120]})"
+    return ci_state(pr.get("statusCheckRollup"))
 
 
-def tracked_files():
-    r = subprocess.run(["git", "ls-files"], capture_output=True, text=True)
-    return r.stdout.splitlines() if r.returncode == 0 else []
+def title_check(title, commitlint):
+    """Shape only. The type and scope enums are the repo's own (its commitlint config)."""
+    shape = "forme `type(scope): sujet` respectée" if TITLE_SHAPE.match(title) else "⚠️ forme `type(scope): sujet` non respectée"
+    if commitlint:
+        return f"{shape} · config `{commitlint[0]}` à lire pour l'enum de types et de scopes"
+    return f"{shape} · pas de commitlint dans ce repo : forme seule vérifiée"
 
 
 def main():
     workdir = Path(sys.argv[1])
     pr = json.loads((workdir / "pr.json").read_text())
     patch = (workdir / "diff.patch").read_text()
-    profile_file = workdir / "profile.json"
-    profile = json.loads(profile_file.read_text()) if profile_file.exists() else {}
     default_branch = (workdir / "default_branch").read_text().strip() if (workdir / "default_branch").exists() else "main"
+    local = pr.get("number") is None
 
     files = pr.get("files") or []
     paths = [f["path"] for f in files]
     size = pr["additions"] + pr["deletions"]
     added = list(added_lines(patch))
+    routed, everywhere, meta = route(workdir, paths)
     out = []
     w = out.append
 
-    w(f"# Faits mécaniques — PR #{pr['number']} · {pr['title']}\n")
+    subject = f"branche `{pr['headRefName']}` vs `{default_branch}`" if local else f"PR #{pr['number']} · {pr['title']}"
+    w(f"# Faits mécaniques — {subject}\n")
 
     w("## Arrêts et signalements\n")
     author = (pr.get("author") or {}).get("login", "")
     labels = {label["name"].lower() for label in pr.get("labels") or []}
-    stops = []
-    if pr["state"] != "OPEN":
+    stops, notes = [], []
+    if not local and pr["state"] != "OPEN":
         stops.append(f"STOP : PR à l'état {pr['state']}, rien à relire.")
     if "dependabot" in author.lower() or labels & {"dependencies", "dependabot"}:
         stops.append("STOP : PR Dependabot, hors périmètre de ce skill. Le dire, sans fiche.")
-    notes = []
     if pr["isDraft"]:
         notes.append("Draft : verdict indicatif.")
-    if pr["baseRefName"] != default_branch:
+    if not local and pr["baseRefName"] != default_branch:
         notes.append(f"Base `{pr['baseRefName']}` ≠ `{default_branch}` : PR empilée, le diff peut inclure la PR parente.")
-    if not profile:
-        notes.append("Aucun profil `.claude/pr-review.json` sur la base : seules les vérifications génériques s'appliquent. "
-                     "Les conventions du dépôt se découvrent à la lecture (étape 3).")
+    if not meta["rules"] and not meta.get("indexes"):
+        notes.append("Aucune règle écrite trouvée sur la base (ni `.claude/rules/**`, ni `.github/instructions/**`, ni `CLAUDE.md`) : "
+                     "relecture sur l'intention, le titre et les catégories génériques seulement. Le dire dans la fiche.")
     for line in stops + notes or ["Aucun."]:
         w(f"- {line}")
 
     w("\n## Taille et déclencheurs\n")
     zones = sorted({zone(p) for p in paths})
-    w(f"- Périmètre : {len(paths)} fichiers · +{pr['additions']}/-{pr['deletions']} lignes · zones : {', '.join(zones)}")
+    w(f"- Périmètre : {len(paths)} fichiers · +{pr['additions']}/-{pr['deletions']} lignes · zones : {', '.join(zones) or 'aucune'}")
     w("- Lecture : " + ("fichier par fichier (> 2000 lignes)" if size > 2000 else "d'un bloc"))
-    fan_out = len(paths) > 40 or size > 2500
-    w(f"- Fan-out : {'à PROPOSER (> 40 fichiers ou > 2500 lignes), attendre le go' if fan_out else 'non (relecture inline)'}")
-    stakes_re = profile.get("stakes")
-    stakes = [p for p in paths if stakes_re and re.search(stakes_re, p)]
-    reasons = []
-    if stakes:
-        reasons.append(f"touche {', '.join(f'`{p}`' for p in stakes[:5])}{' …' if len(stakes) > 5 else ''}")
-    if size > 300:
-        reasons.append(f"{size} lignes (> 300)")
-    w(f"- Second avis, critère d'enjeu : {'rempli — ' + ' ; '.join(reasons) if reasons else 'non rempli'} (le critère de doute reste à juger)")
+    volume = len(paths) > 40 or size > 2500
+    w(f"- Fan-out : {'à PROPOSER (> 40 fichiers ou > 2500 lignes), attendre le go' if volume else 'non (relecture inline)'}")
+    w("- Second avis, critères d'enjeu candidats (à confirmer par les règles du repo, ceux de doute restent à juger) :")
+    hints = []
+    if volume:
+        hints.append("volume (> 40 fichiers ou > 2500 lignes)")
+    access = [p for p in paths if ACCESS.search(p)]
+    if access:
+        hints.append("accès / permissions : " + ", ".join(f"`{p}`" for p in access[:4]))
+    destructive = sorted({f"`{p}:{n}`" for p, n, t in added if DESTRUCTIVE.search(t)})
+    if destructive:
+        hints.append("écriture destructive : " + ", ".join(destructive[:4]))
+    migrations = [p for p in paths if MIGRATION.search(p)]
+    if migrations and not destructive:
+        hints.append("migration touchée")
+    for h in hints or ["aucun"]:
+        w(f"  - {h}")
 
-    if profile.get("notes"):
-        w("\n## Notes du dépôt\n")
-        w(profile["notes"])
-
-    w("\n## Titre Conventional Commits\n")
-    w(f"- {title_check(pr['title'])}")
+    w("\n## Titre\n")
+    w(f"- {title_check(pr['title'], meta.get('commitlint'))}")
 
     w("\n## CI (read-only, ne colore pas le verdict)\n")
-    w(f"- {ci_state(pr.get('statusCheckRollup'))}")
+    w(f"- {ci_for(pr)}")
+    for log in sorted(workdir.glob("ci-*.log")):
+        w(f"- cause du job rouge : fin du log dans `{log}` (60 dernières lignes) — à lire pour décider s'il existe un constat")
 
-    w("\n## Décisions à confronter\n")
-    index = profile.get("index") or ["CLAUDE.md", "AGENTS.md"]
-    w(f"Toujours, s'ils existent : {', '.join(f'`{i}`' for i in index)}.")
-    if profile.get("decisions"):
-        w(f"Décisions actées : `{profile['decisions']}/`.")
-    if profile.get("rules"):
-        w(f"Rules : `{profile['rules']}/` — une rule dont le frontmatter `paths` cible un fichier du diff s'applique à ce fichier.")
-    routes = profile.get("routes") or []
-    if routes:
-        w("\n| Fichier | À confronter |\n|---|---|")
-        refs = set()
+    w("\n## Règles du dépôt à confronter\n")
+    w("Source : la branche de base, jamais la branche relue. Ce sont **elles** les critères ; rien d'autre n'est reproché.\n")
+    if meta.get("indexes"):
+        w(f"- Index : {', '.join(f'`{i}`' for i in meta['indexes'])}")
+    if meta["rules"]:
+        w(f"- Règles lues sur la base ({len(meta['rules'])}) : {', '.join(f'`{r}`' for r in meta['rules'])}")
+        if everywhere:
+            w(f"- Sans `paths` (valent partout) : {', '.join(f'`{r}`' for r in everywhere)}")
+        w("\n| Fichier touché | Règles qui s'y appliquent |\n|---|---|")
         for p in paths:
-            hits = [r for r in routes if re.search(r["paths"], p)]
-            for r in hits:
-                refs.update(r.get("refs") or [])
-            w(f"| `{p}` | {' · '.join(r['read'] for r in hits) if hits else '—'} |")
-        w(f"\nÀ lire : {', '.join(sorted(refs)) or 'aucun routé'}")
+            w(f"| `{p}` | {', '.join(f'`{r}`' for r in routed[p]) or '—'} |")
     else:
-        w("\nPas de routage chemin → décision : lire l'index puis chercher les décisions qui concernent les zones touchées.")
+        w("- Aucune règle `.claude/rules/**` ni `.github/instructions/**`.")
+    if meta.get("docs"):
+        w("")
+        w(f"- Docs liés par l'index ou les règles, lus aussi sous `{workdir}/rules/` ({len(meta['docs'])}) : "
+          + ", ".join(f"`{d}`" for d in meta["docs"][:12]) + (" …" if len(meta["docs"]) > 12 else ""))
+    if meta.get("skipped_docs"):
+        w(f"- ⚠️ {meta['skipped_docs']} doc(s) lié(s) non récupérés (plafond) : lire à la demande sur la base.")
 
-    for req in profile.get("required", []):
-        for f in files:
-            p = f["path"]
-            if re.search(req["paths"], p):
-                head = workdir / "head" / p
-                if not (head.exists() and req["contains"] in head.read_text()):
-                    w(f"\n⚠️ `{p}` : {req['label']}")
+    rule_texts = {r: (workdir / "rules" / r).read_text() for r in meta["rules"]}
+    doc_texts = {d: (workdir / "rules" / d).read_text() for d in meta.get("docs", []) if (workdir / "rules" / d).exists()}
+    all_texts = {**rule_texts, **doc_texts}
+
+    def mentioning(rx):
+        return [r for r, text in rule_texts.items() if rx.search(text)]
+
+    def head_text(p):
+        f = workdir / "head" / p
+        return f.read_text(errors="replace") if f.exists() else ""
 
     w("\n## Vérifications hors-diff (résultats bruts, à juger)\n")
-    n = 0
+    w("Chacune ne s'applique que si les règles du repo la rendent pertinente ; la fiche dit ce qu'elle a donné, y compris « rien ». "
+      "Les `grep` sont faits ici : il reste à confirmer chaque candidat par la lecture.\n")
 
-    zones_re = profile.get("import_zones")
-    if zones_re:
-        n += 1
-        w(f"### {n}. Imports ajoutés dans les zones contraintes\n")
-        hits = []
-        for p, ln, text in added:
-            if re.search(zones_re, p):
-                m = IMPORT.search(text)
-                if m:
-                    hits.append(f"- `{p}:{ln}` → `{m.group(1) or m.group(2)}`")
-        w("\n".join(hits) or "rien")
-        w("")
-
-    n += 1
-    w(f"### {n}. Jumeaux\n")
-    w("jugement : chercher la signature du défaut corrigé dans tout le repo (`grep -rn`).\n")
-
-    n += 1
-    w(f"### {n}. Tests des fichiers source touchés\n")
-    tests = {**DEFAULT_TESTS, **(profile.get("tests") or {})}
-    test_files = {p for p in paths if re.search(tests["test"], p)}
-    local = [t for t in tracked_files() if re.search(tests["test"], t)]
-    rows = []
+    w("### 0. Fichiers déjà cités dans les règles ou les docs du dépôt (fichiers « brûlés »)\n")
+    burned = []
     for p in paths:
-        if not re.search(tests["source"], p) or p in test_files:
-            continue
-        base = Path(p).name.split(".")[0]
-        touched = any(base in Path(t).name for t in test_files)
-        existing = any(base in Path(t).name for t in local)
-        rows.append(f"- `{p}` — test touché : {'oui' if touched else 'non'} · test existant (checkout local) : {'oui' if existing else 'non'}")
-    w("\n".join(rows) or "aucun fichier source touché")
+        for name, text in all_texts.items():
+            if p in text:
+                burned.append(f"- `{p}` cité dans `{name}`")
+    w("\n".join(burned[:30]) or "rien")
     w("")
 
-    locked = profile.get("locked") or []
-    if locked:
-        n += 1
-        w(f"### {n}. Interdits du dépôt (lignes ajoutées)\n")
+    w("### 1. Jumeaux (fix-twins)\n")
+    twins = [r for r in rule_texts if re.search(r"(?i)twin|jumeau", r + rule_texts[r][:400])]
+    w(f"Règle du repo : {', '.join(f'`{r}`' for r in twins) if twins else 'aucune (pas de règle fix-twins)'}")
+    w("jugement : déduire la **signature** du défaut corrigé (aucun script ne la connaît), puis la `grep` dans tout le repo et auditer chaque appelant.\n")
+
+    w("### 2. Comportement verrouillé par un test ?\n")
+    test_files = {p for p in paths if TEST_FILE.search(p)}
+    local_tests = [t for t in tracked_files() if TEST_FILE.search(t) and t not in test_files]
+    rows = []
+    for p in paths:
+        if not SOURCE_FILE.search(p) or p in test_files:
+            continue
+        base = Path(p).name.split(".")[0]
+        touched = [t for t in test_files if base in Path(t).name or base in head_text(t)]
+        mentioning_specs = []
+        for t in local_tests:
+            try:
+                if re.search(rf"\b{re.escape(base)}\b", Path(t).read_text(errors="replace")):
+                    mentioning_specs.append(t)
+            except OSError:
+                pass
+        rows.append(f"- `{p}` — test touché : {', '.join(f'`{t}`' for t in touched[:3]) or 'non'} · "
+                    f"specs existantes qui le mentionnent (checkout courant) : {', '.join(f'`{t}`' for t in mentioning_specs[:4]) or 'aucune'}"
+                    f"{' …' if len(mentioning_specs) > 4 else ''}")
+    w("\n".join(rows) or "aucun fichier source touché")
+    w("\njugement : le test couvre-t-il le changement, **cas d'erreur** compris ? (Les specs existantes sont lues dans le checkout courant : identiques à la PR pour tout fichier non touché.)\n")
+
+    w("### 3. Schéma / entité ↔ migration\n")
+    schema = [p for p in paths if SCHEMA.search(p) and not MIGRATION.search(p)]
+    w(f"- Schéma / entités candidats : {', '.join(f'`{p}`' for p in schema) or 'aucun'}")
+    w(f"- Migrations touchées : {', '.join(f'`{p}`' for p in migrations) or 'aucune'}")
+    w("- S'applique seulement si les règles du repo disent qu'il **écrit ses migrations** (un schéma vendoré n'en a pas : le dire).")
+    if schema and not migrations:
+        w("- ⚠️ schéma touché SANS migration dans le diff → 🔴 si le repo écrit ses migrations")
+    w("")
+
+    w("### 4. Clé de tenant dans chaque branche\n")
+    tenant = mentioning(TENANT_WORDS)
+    w(f"Règles qui parlent de tenant : {', '.join(f'`{r}`' for r in tenant) if tenant else 'aucune → non concerné'}")
+    if tenant:
+        keys = sorted({k for r in tenant for line in rule_texts[r].splitlines() if TENANT_WORDS.search(line)
+                       for k in BACKTICK.findall(line) if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{2,}", k)})
+        w(f"Clés candidates lues dans ces règles : {', '.join(f'`{k}`' for k in keys) or 'aucune identifiée'}")
+        rows = []
+        for p, n, text in added:
+            if WHERE.search(text):
+                has = any(re.search(rf"\b{re.escape(k)}\b", text) for k in keys)
+                rows.append(f"- `{p}:{n}` — {'clé présente' if has else '⚠️ clé absente de la ligne'} — `{text.strip()[:100]}`")
+        w("\n".join(rows[:30]) or "aucune clause `WHERE` ajoutée")
+        w("jugement : une clé absente de la ligne peut venir d'un scope de base ; lire la méthode entière, et les lectures voisines du même service.")
+    w("")
+
+    w("### 5. API verrouillée ou interdite introduite\n")
+    locks = mentioning(LOCK_WORDS)
+    w(f"Règles qui verrouillent ou interdisent : {', '.join(f'`{r}`' for r in locks) if locks else 'aucune → non concerné'}")
+    if locks:
         hits = []
-        for p, ln, text in added:
-            for rule in locked:
-                if rule.get("paths") and not re.search(rule["paths"], p):
-                    continue
-                if rule.get("ignore") and re.search(rule["ignore"], text.strip()):
-                    continue
-                if re.search(rule["pattern"], text):
-                    hits.append(f"- `{p}:{ln}` — {rule['label']} — `{text.strip()[:100]}`")
-        w("\n".join(hits) or "rien")
-        w("")
+        for r in locks:
+            tokens = sorted({k for line in rule_texts[r].splitlines() if LOCK_WORDS.search(line) for k in BACKTICK.findall(line) if len(k) >= 3})
+            for tok in tokens:
+                pat = re.compile(r"(?<![\w.])" + re.escape(tok) + r"(?![\w])")
+                for p, n, text in added:
+                    if pat.search(text):
+                        hits.append(f"- `{p}:{n}` — `{tok}` (cité par `{r}`) — `{text.strip()[:90]}`")
+        w("\n".join(hits[:30]) or "aucune API citée comme interdite par ces règles n'apparaît dans les lignes ajoutées")
+        if len(hits) > 30:
+            w(f"- … +{len(hits) - 30} autres")
+        w("jugement : les mots entre backticks des lignes d'interdit sont cherchés tels quels ; la ligne introduit-elle l'API, ou la mentionne-t-elle (commentaire, chaîne) ? Lire aussi la règle pour les interdits qu'aucun mot ne désigne.")
+    w("")
 
-    for pair in profile.get("companions", []):
-        n += 1
-        w(f"### {n}. {pair['label']}\n")
-        changed = [p for p in paths if re.search(pair["changed"], p) and not (pair.get("except") and re.search(pair["except"], p))]
-        companions = [p for p in paths if re.search(pair["companion"], p)]
-        w(f"- Touchés : {', '.join(f'`{p}`' for p in changed) or 'aucun'}")
-        w(f"- Accompagnement : {', '.join(f'`{p}`' for p in companions) or 'aucun'}")
-        if changed and not companions:
-            w(f"- ⚠️ {pair['warning']}")
-        if pair.get("judge"):
-            w(f"\njugement : {pair['judge']}")
-        if pair.get("if_confirmed"):
-            w(f"Si confirmé : {pair['if_confirmed']}")
-        w("")
+    w("### 6. Performance / chargement de données\n")
+    perf = mentioning(PERF_WORDS)
+    w(f"Règles de performance : {', '.join(f'`{r}`' for r in perf) if perf else 'aucune → non concerné'}")
+    if perf:
+        rows = [f"- `{p}:{n}` — `{t.strip()[:100]}`" for p, n, t in added if LOOPING.search(t)]
+        w("\n".join(rows[:30]) or "aucun motif de boucle asynchrone ou de `Promise.all` ajouté")
+        w("jugement : `grep` le batch / loader existant avant d'en exiger un nouveau ; lire la règle pour les motifs propres au dépôt.")
+    w("")
 
-    for check in profile.get("checks", []):
-        n += 1
-        w(f"### {n}. {check['label']}\n")
-        w(f"jugement : {check['judge']}")
-        if check.get("if_confirmed"):
-            w(f"Si confirmé : {check['if_confirmed']}")
-        w("")
+    w("### 7. Réutilisation plutôt que duplication (catalogues de messages)\n")
+    cat_added = [(p, n, t) for p, n, t in added if CATALOG.search(p) and t.strip()]
+    if cat_added:
+        catalogs = [t for t in tracked_files() if CATALOG.search(t) and re.search(r"\.(json|ya?ml|po|xlf|arb|properties)$", t)]
+        index = {}
+        for c in sorted(set(catalogs) | {p for p, _, _ in cat_added}):
+            src = head_text(c) or (Path(c).read_text(errors="replace") if Path(c).exists() else "")
+            for i, line in enumerate(src.splitlines(), 1):
+                m = KV.search(line)
+                if m:
+                    index.setdefault(norm(m.group(2)), []).append((c, i, m.group(1)))
+        rows = []
+        for p, n, text in cat_added[:60]:
+            m = KV.search(text)
+            if not m:
+                continue
+            key, val = m.group(1), norm(m.group(2))
+            others = [(c, i, k) for c, i, k in index.get(val, []) if not (c == p and i == n)]
+            if val and others:
+                same_key = [o for o in others if o[0] == p and o[2] == key]
+                tag = "🟠 même clé définie deux fois dans ce catalogue" if same_key else "🟡 valeur déjà présente"
+                rows.append(f"- `{p}:{n}` `{key}` — {tag} : " + ", ".join(f"`{c}:{i}` (`{k}`)" for c, i, k in others[:3]))
+        for p in sorted({p for p, _, _ in cat_added}):
+            if p.endswith(".json"):
+                dups = json_duplicate_keys(head_text(p))
+                rows += [f"- `{p}` — 🟠 clé en double dans le même objet : `{k}`" for k in dups[:10]]
+        w("Lignes ajoutées dans les catalogues :")
+        for p, n, t in cat_added[:20]:
+            w(f"- `{p}:{n}` — `{t.strip()[:110]}`")
+        if len(cat_added) > 20:
+            w(f"- … +{len(cat_added) - 20} autres lignes")
+        w("\nDoublons trouvés (valeur comparée sans casse ni ponctuation finale, catalogues du checkout courant + fichiers touchés) :")
+        w("\n".join(rows) or "aucun")
+        w("\njugement : un doublon de valeur justifie-t-il vraiment de réutiliser la clé existante (même contexte d'usage) ?")
+    else:
+        w("aucun catalogue de messages touché")
 
     print("\n".join(out))
 
