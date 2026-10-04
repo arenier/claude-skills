@@ -7,7 +7,7 @@ découvrent à la lecture.
 
 `collect.sh` lit ce fichier sur la **branche de base** de la PR, jamais sur la branche relue : son
 auteur pourrait sinon réécrire le référentiel qui le juge. Une routine cloud fait de même, par
-`get_file_contents` au ref de la branche par défaut.
+`get_file_contents` au ref de la branche par défaut du dépôt relu.
 
 Tous les champs sont optionnels. Les motifs sont des expressions régulières Python, appliquées aux
 chemins du dépôt (champs `paths`, `changed`, `companion`, `except`, `stakes`, `import_zones`) ou au
