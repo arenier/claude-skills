@@ -37,7 +37,40 @@ LOCATION = re.compile(r"^\S+:\d+(-\d+)?$")
 MARKER = "<!-- pr-review -->"
 
 
-def validate(review):
+def floors(review):
+    """Severity floors the review's own fields impose, so a verdict cannot contradict them.
+
+    The convention: a field that reports a problem starts with its marker (🔴 or ⚠️)
+    or says SANS migration / NON corrigé. Returns (needed severity, why) pairs.
+    """
+    out = []
+    for field, label in (("locks", "verrou de stack"), ("tenant", "clé de tenant")):
+        if str(review.get(field, "")).strip().startswith("🔴"):
+            out.append(("blocker", f"« {label} » signale un 🔴"))
+    if "SANS migration" in str(review.get("migrations", "")):
+        out.append(("blocker", "entité modifiée SANS migration"))
+    if str(review.get("tests", "")).strip().startswith("⚠️"):
+        out.append(("major", "logique ou correctif sans test"))
+    if "NON corrigé" in str(review.get("twins", "")):
+        out.append(("major", "jumeau identifié, ni corrigé ni signalé"))
+    return out
+
+
+def check_location(workdir, location):
+    """The finding's path must be a touched file (read in its PR version) or an existing file; the line must exist."""
+    path, _, rest = location.rpartition(":")
+    line = int(rest.split("-")[0])
+    head = workdir / "head" / path
+    if head.exists():
+        n = len(head.read_text(errors="replace").splitlines())
+        return None if line <= n else f"ligne {line} au-delà de la fin de `{path}` ({n} lignes en version PR)"
+    touched = {f["path"] for f in json.loads((workdir / "pr.json").read_text()).get("files") or []}
+    if path in touched:
+        return None  # deleted by the PR: no PR version to measure
+    return None if Path(path).exists() else f"`{path}` n'est ni touché par la PR ni présent dans le checkout"
+
+
+def validate(review, workdir=None):
     problems = [f"champ manquant : {f}" for f in FIELDS if not str(review.get(f, "")).strip()]
     for i, f in enumerate(review.get("findings", []), 1):
         sev = f.get("severity")
@@ -47,6 +80,15 @@ def validate(review):
         problems += [f"constat {i} ({sev}) : champ manquant : {k}" for k in REQUIRED[sev] if not str(f.get(k, "")).strip()]
         if "location" in REQUIRED[sev] and f.get("location") and not LOCATION.match(f["location"]):
             problems.append(f"constat {i} : location « {f['location']} » n'est pas un path:line")
+        elif workdir and f.get("location"):
+            bad = check_location(workdir, f["location"])
+            if bad:
+                problems.append(f"constat {i} : {bad}")
+    sevs = {f.get("severity") for f in review.get("findings", [])}
+    for needed, why in floors(review):
+        ok = "blocker" in sevs if needed == "blocker" else bool(sevs & {"blocker", "major"})
+        if not ok:
+            problems.append(f"plancher de sévérité : {why} exige au moins un constat {'🔴' if needed == 'blocker' else '🟠 ou 🔴'}")
     return problems
 
 
@@ -175,7 +217,7 @@ def main():
     review = json.loads((workdir / "review.json").read_text())
     rules_file = workdir / "rules.json"
     rules = json.loads(rules_file.read_text()) if rules_file.exists() else {}
-    problems = validate(review)
+    problems = validate(review, workdir)
     if problems:
         print("review.json invalide :", file=sys.stderr)
         print("\n".join(f"  - {p}" for p in problems), file=sys.stderr)

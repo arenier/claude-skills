@@ -13,6 +13,7 @@ repo wrote in its rules (see rules.py); this script only routes the diff to them
 """
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -30,9 +31,13 @@ SCHEMA = re.compile(r"(?i)(entit(y|ies)|schema|\.model\.|/models?/|\.prisma$|\.s
 CATALOG = re.compile(r"(?i)(^|/)(locales?|i18n|translations?|messages?|lang)(/|\.)|\.(po|xlf|arb)$")
 ACCESS = re.compile(r"(?i)(auth|guard|permission|policy|acl|rbac|sso|realm)")
 DESTRUCTIVE = re.compile(r"(?i)\b(DROP\s+(TABLE|COLUMN)|ALTER\s+TYPE|TRUNCATE|deleteAll|DELETE\s+FROM)\b")
-LOCK_WORDS = re.compile(r"(?i)(interdit|verrouill|forbidden|locked|lock\b|ne pas utiliser|never use|must not)")
+LOCK_WORDS = re.compile(r"(?i)(interdit|verrouill|forbidden|locked|lock\b|ne pas utiliser|never use|must not|\bpas de\b|\bjamais\b|\bni\b|\bnever\b)")
 PERF_WORDS = re.compile(r"(?i)(n\+1|dataloader|batch|performance|perf\b|over-?fetch)")
 TENANT_WORDS = re.compile(r"(?i)(tenant|multi-?tenan|customerId|organi[sz]ationId|workspaceId)")
+BACKTICK = re.compile(r"`([^`\n]+)`")
+WHERE = re.compile(r"(?i)(\.where\(|\.andWhere\(|\.orWhere\(|\bWHERE\b|\bwhere:)")
+LOOPING = re.compile(r"Promise\.all\(|\.(?:forEach|map)\(\s*async|for\s*\(.*\bof\b|for\s+await|while\s*\(")
+KV = re.compile(r'^\s*["\']?([\w.\-]+)["\']?\s*[:=]\s*["\'](.*?)["\'],?\s*$')
 
 
 def added_lines(patch):
@@ -50,6 +55,35 @@ def added_lines(patch):
             line += 1
         elif path and raw.startswith(" "):
             line += 1
+
+
+def norm(value):
+    """Catalog values compared without case, surrounding space or trailing punctuation."""
+    return re.sub(r"[\s.!?:;…]+$", "", value.strip().casefold())
+
+
+def json_duplicate_keys(text):
+    """Keys defined twice in the same JSON object: the last one silently wins."""
+    dups = []
+
+    def hook(pairs):
+        seen = set()
+        for k, _ in pairs:
+            if k in seen:
+                dups.append(k)
+            seen.add(k)
+        return dict(pairs)
+
+    try:
+        json.loads(text, object_pairs_hook=hook)
+    except ValueError:
+        pass
+    return dups
+
+
+def tracked_files():
+    r = subprocess.run(["git", "ls-files"], capture_output=True, text=True)
+    return r.stdout.splitlines() if r.returncode == 0 else []
 
 
 def zone(path):
@@ -148,6 +182,8 @@ def main():
 
     w("\n## CI (read-only, ne colore pas le verdict)\n")
     w(f"- {ci_state(pr.get('statusCheckRollup'))}")
+    for log in sorted(workdir.glob("ci-*.log")):
+        w(f"- cause du job rouge : fin du log dans `{log}` (60 dernières lignes) — à lire pour décider s'il existe un constat")
 
     w("\n## Règles du dépôt à confronter\n")
     w("Source : la branche de base, jamais la branche relue. Ce sont **elles** les critères ; rien d'autre n'est reproché.\n")
@@ -170,27 +206,55 @@ def main():
         w(f"- ⚠️ {meta['skipped_docs']} doc(s) lié(s) non récupérés (plafond) : lire à la demande sur la base.")
 
     rule_texts = {r: (workdir / "rules" / r).read_text() for r in meta["rules"]}
+    doc_texts = {d: (workdir / "rules" / d).read_text() for d in meta.get("docs", []) if (workdir / "rules" / d).exists()}
+    all_texts = {**rule_texts, **doc_texts}
+
     def mentioning(rx):
         return [r for r, text in rule_texts.items() if rx.search(text)]
 
+    def head_text(p):
+        f = workdir / "head" / p
+        return f.read_text(errors="replace") if f.exists() else ""
+
     w("\n## Vérifications hors-diff (résultats bruts, à juger)\n")
-    w("Chacune ne s'applique que si les règles du repo la rendent pertinente ; la fiche dit ce qu'elle a donné, y compris « rien ».\n")
+    w("Chacune ne s'applique que si les règles du repo la rendent pertinente ; la fiche dit ce qu'elle a donné, y compris « rien ». "
+      "Les `grep` sont faits ici : il reste à confirmer chaque candidat par la lecture.\n")
+
+    w("### 0. Fichiers déjà cités dans les règles ou les docs du dépôt (fichiers « brûlés »)\n")
+    burned = []
+    for p in paths:
+        for name, text in all_texts.items():
+            if p in text:
+                burned.append(f"- `{p}` cité dans `{name}`")
+    w("\n".join(burned[:30]) or "rien")
+    w("")
 
     w("### 1. Jumeaux (fix-twins)\n")
     twins = [r for r in rule_texts if re.search(r"(?i)twin|jumeau", r + rule_texts[r][:400])]
     w(f"Règle du repo : {', '.join(f'`{r}`' for r in twins) if twins else 'aucune (pas de règle fix-twins)'}")
-    w("jugement : chercher la **signature** du défaut corrigé dans tout le repo (`grep -rn`), auditer chaque appelant de la méthode corrigée.\n")
+    w("jugement : déduire la **signature** du défaut corrigé (aucun script ne la connaît), puis la `grep` dans tout le repo et auditer chaque appelant.\n")
 
     w("### 2. Comportement verrouillé par un test ?\n")
     test_files = {p for p in paths if TEST_FILE.search(p)}
+    local_tests = [t for t in tracked_files() if TEST_FILE.search(t) and t not in test_files]
     rows = []
     for p in paths:
         if not SOURCE_FILE.search(p) or p in test_files:
             continue
         base = Path(p).name.split(".")[0]
-        rows.append(f"- `{p}` — test touché : {'oui' if any(base in Path(t).name for t in test_files) else 'non'}")
+        touched = [t for t in test_files if base in Path(t).name or base in head_text(t)]
+        mentioning_specs = []
+        for t in local_tests:
+            try:
+                if re.search(rf"\b{re.escape(base)}\b", Path(t).read_text(errors="replace")):
+                    mentioning_specs.append(t)
+            except OSError:
+                pass
+        rows.append(f"- `{p}` — test touché : {', '.join(f'`{t}`' for t in touched[:3]) or 'non'} · "
+                    f"specs existantes qui le mentionnent (checkout courant) : {', '.join(f'`{t}`' for t in mentioning_specs[:4]) or 'aucune'}"
+                    f"{' …' if len(mentioning_specs) > 4 else ''}")
     w("\n".join(rows) or "aucun fichier source touché")
-    w("\njugement : le test couvre-t-il le changement, **cas d'erreur** compris ? Chercher aussi la spec du fichier et de ses appelants.\n")
+    w("\njugement : le test couvre-t-il le changement, **cas d'erreur** compris ? (Les specs existantes sont lues dans le checkout courant : identiques à la PR pour tout fichier non touché.)\n")
 
     w("### 3. Schéma / entité ↔ migration\n")
     schema = [p for p in paths if SCHEMA.search(p) and not MIGRATION.search(p)]
@@ -205,33 +269,79 @@ def main():
     tenant = mentioning(TENANT_WORDS)
     w(f"Règles qui parlent de tenant : {', '.join(f'`{r}`' for r in tenant) if tenant else 'aucune → non concerné'}")
     if tenant:
-        w("jugement : après tout refactor de `WHERE` / `OR`, lire la méthode entière, et les lectures voisines du même service.")
+        keys = sorted({k for r in tenant for line in rule_texts[r].splitlines() if TENANT_WORDS.search(line)
+                       for k in BACKTICK.findall(line) if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{2,}", k)})
+        w(f"Clés candidates lues dans ces règles : {', '.join(f'`{k}`' for k in keys) or 'aucune identifiée'}")
+        rows = []
+        for p, n, text in added:
+            if WHERE.search(text):
+                has = any(re.search(rf"\b{re.escape(k)}\b", text) for k in keys)
+                rows.append(f"- `{p}:{n}` — {'clé présente' if has else '⚠️ clé absente de la ligne'} — `{text.strip()[:100]}`")
+        w("\n".join(rows[:30]) or "aucune clause `WHERE` ajoutée")
+        w("jugement : une clé absente de la ligne peut venir d'un scope de base ; lire la méthode entière, et les lectures voisines du même service.")
     w("")
 
     w("### 5. API verrouillée ou interdite introduite\n")
     locks = mentioning(LOCK_WORDS)
     w(f"Règles qui verrouillent ou interdisent : {', '.join(f'`{r}`' for r in locks) if locks else 'aucune → non concerné'}")
     if locks:
-        w("jugement : lire la liste **dans la règle**, puis `grep` les lignes ajoutées du diff pour ces API exactes. "
-          "La ligne introduit-elle l'API, ou la mentionne-t-elle (commentaire, chaîne) ?")
+        hits = []
+        for r in locks:
+            tokens = sorted({k for line in rule_texts[r].splitlines() if LOCK_WORDS.search(line) for k in BACKTICK.findall(line) if len(k) >= 3})
+            for tok in tokens:
+                pat = re.compile(r"(?<![\w.])" + re.escape(tok) + r"(?![\w])")
+                for p, n, text in added:
+                    if pat.search(text):
+                        hits.append(f"- `{p}:{n}` — `{tok}` (cité par `{r}`) — `{text.strip()[:90]}`")
+        w("\n".join(hits[:30]) or "aucune API citée comme interdite par ces règles n'apparaît dans les lignes ajoutées")
+        if len(hits) > 30:
+            w(f"- … +{len(hits) - 30} autres")
+        w("jugement : les mots entre backticks des lignes d'interdit sont cherchés tels quels ; la ligne introduit-elle l'API, ou la mentionne-t-elle (commentaire, chaîne) ? Lire aussi la règle pour les interdits qu'aucun mot ne désigne.")
     w("")
 
     w("### 6. Performance / chargement de données\n")
     perf = mentioning(PERF_WORDS)
     w(f"Règles de performance : {', '.join(f'`{r}`' for r in perf) if perf else 'aucune → non concerné'}")
     if perf:
-        w("jugement : `grep` le batch / loader existant avant d'en exiger un nouveau.")
+        rows = [f"- `{p}:{n}` — `{t.strip()[:100]}`" for p, n, t in added if LOOPING.search(t)]
+        w("\n".join(rows[:30]) or "aucun motif de boucle asynchrone ou de `Promise.all` ajouté")
+        w("jugement : `grep` le batch / loader existant avant d'en exiger un nouveau ; lire la règle pour les motifs propres au dépôt.")
     w("")
 
     w("### 7. Réutilisation plutôt que duplication (catalogues de messages)\n")
-    cat_hits = [(p, n, t) for p, n, t in added if CATALOG.search(p) and t.strip()]
-    if cat_hits:
-        for p, n, t in cat_hits[:40]:
+    cat_added = [(p, n, t) for p, n, t in added if CATALOG.search(p) and t.strip()]
+    if cat_added:
+        catalogs = [t for t in tracked_files() if CATALOG.search(t) and re.search(r"\.(json|ya?ml|po|xlf|arb|properties)$", t)]
+        index = {}
+        for c in sorted(set(catalogs) | {p for p, _, _ in cat_added}):
+            src = head_text(c) or (Path(c).read_text(errors="replace") if Path(c).exists() else "")
+            for i, line in enumerate(src.splitlines(), 1):
+                m = KV.search(line)
+                if m:
+                    index.setdefault(norm(m.group(2)), []).append((c, i, m.group(1)))
+        rows = []
+        for p, n, text in cat_added[:60]:
+            m = KV.search(text)
+            if not m:
+                continue
+            key, val = m.group(1), norm(m.group(2))
+            others = [(c, i, k) for c, i, k in index.get(val, []) if not (c == p and i == n)]
+            if val and others:
+                same_key = [o for o in others if o[0] == p and o[2] == key]
+                tag = "🟠 même clé définie deux fois dans ce catalogue" if same_key else "🟡 valeur déjà présente"
+                rows.append(f"- `{p}:{n}` `{key}` — {tag} : " + ", ".join(f"`{c}:{i}` (`{k}`)" for c, i, k in others[:3]))
+        for p in sorted({p for p, _, _ in cat_added}):
+            if p.endswith(".json"):
+                dups = json_duplicate_keys(head_text(p))
+                rows += [f"- `{p}` — 🟠 clé en double dans le même objet : `{k}`" for k in dups[:10]]
+        w("Lignes ajoutées dans les catalogues :")
+        for p, n, t in cat_added[:20]:
             w(f"- `{p}:{n}` — `{t.strip()[:110]}`")
-        if len(cat_hits) > 40:
-            w(f"- … +{len(cat_hits) - 40} autres lignes")
-        w("\njugement : pour chaque clé ajoutée, `grep` sa **valeur** (et ses variantes de casse / ponctuation) dans les catalogues ; "
-          "la même clé définie deux fois dans un catalogue masque l'autre (🟠) ; un nouveau terme qui en duplique un (🟡).")
+        if len(cat_added) > 20:
+            w(f"- … +{len(cat_added) - 20} autres lignes")
+        w("\nDoublons trouvés (valeur comparée sans casse ni ponctuation finale, catalogues du checkout courant + fichiers touchés) :")
+        w("\n".join(rows) or "aucun")
+        w("\njugement : un doublon de valeur justifie-t-il vraiment de réutiliser la clé existante (même contexte d'usage) ?")
     else:
         w("aucun catalogue de messages touché")
 

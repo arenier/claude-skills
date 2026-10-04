@@ -53,8 +53,11 @@ ci-dessous sont donnés en français ; ne les traduire que si la convention du d
 
 ## Déroulé
 
-Les scripts rassemblent les faits et mettent en forme ; toi, tu juges. Rien de ce qu'un script
-établit ne se refait à la main, et rien de ce qui demande du jugement ne se délègue à un `grep`.
+**Tout ce qui peut s'écrire en script est un script.** Les scripts rassemblent les faits, font les
+`grep`, appliquent les planchers et mettent en forme ; toi, tu juges. Rien de ce qu'un script établit ne
+se refait à la main, et rien de ce qui demande du jugement ne se délègue à un `grep`. Si tu te surprends
+à refaire à la main un calcul, un `grep` ou une mise en forme que le dépôt de skills pourrait écrire une
+fois pour toutes, c'est le script qui manque : ne pas l'improviser, le signaler.
 
 | # | Étape | Qui |
 |---|---|---|
@@ -64,11 +67,11 @@ Les scripts rassemblent les faits et mettent en forme ; toi, tu juges. Rien de c
 | 3 | Lire les règles routées vers le diff | jugement |
 | 4 | Lire le code, chercher la réfutation | jugement |
 | 5 | Trancher les vérifications hors-diff | jugement, sur les résultats bruts de l'étape 1 |
-| 6 | Garde-fous : lire la CI, vérifications locales ciblées | lecture CI scriptée, le reste sur go |
+| 6 | Garde-fous : CI lue et cause d'un job rouge récupérée ; vérifications locales ciblées, sur go | scripts `collect.sh` et `local-gate.sh` ; décider de lancer ou non : jugement |
 | 7 | Filtrer, classer, plafonner les constats | jugement |
-| 7b | Second avis à froid, si un critère est rempli | jugement (proposer, attendre le go) |
+| 7b | Second avis à froid, si un critère est rempli | jugement (proposer, attendre le go) ; prompt aveugle par script `blind-prompt.sh` |
 | 8 | Écrire `review.json` | jugement |
-| 9 | Calculer le verdict, rendre fiche et commentaire | script `render.py` |
+| 9 | Valider, appliquer les planchers, calculer le verdict, rendre fiche et commentaire | script `render.py` |
 | 10 | Poster, sur go explicite | script `post.sh` |
 
 ## 0 et 1. Résoudre, découvrir, rassembler
@@ -100,8 +103,9 @@ affiche :
 - **CI** : verte, rouge sur tel job, en attente, non lancée.
 - **Règles** : lesquelles s'appliquent à quel fichier touché, d'après les globs `paths` / `applyTo` de
   leur frontmatter ; celles sans glob valent partout.
-- **Vérifications hors-diff** : résultats bruts des `grep`, et quelles règles du dépôt les rendent
-  pertinentes.
+- **Vérifications hors-diff** : les `grep` sont faits (voir l'étape 5) et quelles règles du dépôt les
+  rendent pertinentes.
+- **Cause d'un job rouge** : `collect.sh` récupère la fin du log des runs en échec (`WORKDIR/ci-<run>.log`).
 
 Sans règle écrite sur la base, `facts.md` le dit : le dire aussi dans la fiche, et relire sur la seule
 base de l'intention, du titre et des catégories génériques qui restent valables (couverture de test,
@@ -174,20 +178,24 @@ C'est l'étape qui sépare une relecture utile d'une liste de faux positifs.
 ## 5. Trancher les vérifications hors-diff
 
 Une lecture attentive du diff trouve seule les bugs de logique locaux. Ce qu'elle ne fait **jamais**
-spontanément, c'est sortir du diff. Ces vérifications exigent une action (un `grep`, une lecture hors
-diff) et c'est là la valeur propre du skill. **Chacune ne s'applique que si les règles du dépôt la
-rendent pertinente** ; la fiche dit ce qu'elle a donné, y compris « rien ». `facts.md` donne les
-résultats bruts : chacun reste un **candidat**, à confirmer par la lecture de l'étape 4.
+spontanément, c'est sortir du diff. Ces vérifications exigent une action hors diff, et c'est là la
+valeur propre du skill. **Chacune ne s'applique que si les règles du dépôt la rendent pertinente** ; la
+fiche dit ce qu'elle a donné, y compris « rien ».
+
+**`analyze.py` a déjà fait les `grep`** et les a mis dans `facts.md`, sous les numéros ci-dessous. Chaque
+résultat reste un **candidat** : il reste à le confirmer par la lecture de l'étape 4, et à trancher s'il
+est un constat. Seule la vérification 1 n'est pas scriptée : la signature d'un défaut, aucun script ne
+la connaît.
 
 | # | Vérification | S'applique si | Action | Si confirmé |
 |---|---|---|---|---|
-| 1 | **Jumeaux** : le correctif laisse un chemin frère intact (legacy ↔ V2, PDF ↔ XLSX ↔ CSV, `getX` ↔ `getXWithAccess`, bulk ↔ unitaire, numérateur ↔ dénominateur…) | le dépôt a une règle **fix-twins** | `grep` la **signature** du défaut (pas le nom de fichier) dans tout le repo ; auditer chaque appelant de la méthode corrigée | 🟠 : corrigé dans la PR, ou **listé comme dette** dans la description. Jamais silencieux. |
-| 2 | **Comportement verrouillé par un test ?** | toujours (générique) | `grep` la spec du fichier **et** des appelants ; vérifier la présence des **cas d'erreur** | 🟠 si rien ne le verrouille, contre la règle de test du dépôt |
-| 3 | **Schéma / entité ↔ migration** : une entité ou une colonne touchée sans migration | **seulement si le dépôt écrit ses propres migrations** (un schéma vendoré n'en a pas : le dire) | croiser les fichiers touchés avec le dossier de migrations du dépôt | 🔴 sans discussion (le schéma n'est pas auto-synchronisé) |
-| 4 | **Clé de tenant dans chaque branche** après tout refactor de `WHERE` / `OR` / parenthèses | **seulement si les règles définissent une clé de tenant** | lire la méthode entière, pas le hunk ; vérifier aussi les **lectures** voisines du même service | 🔴 sur une branche du diff · 🟡 sur un trou préexistant hors diff |
-| 5 | **API verrouillée ou interdite introduite** | **seulement si les règles verrouillent une stack** | `grep` les lignes ajoutées pour **les API exactes que les règles interdisent**, dont la liste se lit **dans la règle** | 🔴 → la règle de verrou du dépôt |
-| 6 | **Performance / chargement de données** : N+1, écritures non groupées, `Promise.all` non borné, sur-chargement | **seulement si les règles couvrent la performance** | `grep` le batch / loader existant avant d'en exiger un nouveau ; lire la règle pour les motifs propres au dépôt | selon le plancher de la règle (souvent 🟠) |
-| 7 | **Réutiliser plutôt que dupliquer** : une clé de traduction ou de message ajoutée duplique un **terme** (la valeur, pas seulement la clé) déjà présent sous une autre clé | le diff touche des catalogues de traduction ou de messages | pour chaque clé ajoutée, `grep` sa **valeur** (et ses variantes de casse et de ponctuation) dans les catalogues ; vérifier aussi que la clé n'est pas déjà définie dans le même catalogue | 🟠 si la même clé est définie deux fois dans un catalogue (la dernière gagne en silence) · 🟡 si une nouvelle clé duplique un terme existant : proposer de réutiliser l'existante. Même réflexe pour une constante, une valeur d'enum ou un utilitaire qui en répète un autre. |
+| 1 | **Jumeaux** : le correctif laisse un chemin frère intact (legacy ↔ V2, PDF ↔ XLSX ↔ CSV, `getX` ↔ `getXWithAccess`, bulk ↔ unitaire, numérateur ↔ dénominateur…) | le dépôt a une règle **fix-twins** | **Jugement** : déduire la **signature** du défaut, puis la `grep` (pas le nom de fichier) dans tout le repo ; auditer chaque appelant de la méthode corrigée | 🟠 : corrigé dans la PR, ou **listé comme dette** dans la description. Jamais silencieux. |
+| 2 | **Comportement verrouillé par un test ?** | toujours (générique) | **Scripté** : tests touchés et specs existantes qui mentionnent chaque fichier source. À juger : le test couvre-t-il le changement, **cas d'erreur** compris ? | 🟠 si rien ne le verrouille, contre la règle de test du dépôt |
+| 3 | **Schéma / entité ↔ migration** : une entité ou une colonne touchée sans migration | **seulement si le dépôt écrit ses propres migrations** (un schéma vendoré n'en a pas : le dire) | **Scripté** : schéma et entités candidats croisés avec les migrations touchées. À juger : le fichier modifie-t-il vraiment le schéma ? | 🔴 sans discussion (le schéma n'est pas auto-synchronisé) |
+| 4 | **Clé de tenant dans chaque branche** après tout refactor de `WHERE` / `OR` / parenthèses | **seulement si les règles définissent une clé de tenant** | **Scripté** : clés candidates lues dans les règles, clauses `WHERE` ajoutées dont la ligne n'a pas la clé. À juger : lire la méthode entière, pas le hunk, et les **lectures** voisines du même service (la clé peut venir d'un scope de base) | 🔴 sur une branche du diff · 🟡 sur un trou préexistant hors diff |
+| 5 | **API verrouillée ou interdite introduite** | **seulement si les règles verrouillent une stack** | **Scripté** : les mots entre backticks des lignes d'interdit des règles sont cherchés dans les lignes ajoutées. À juger : la ligne introduit-elle l'API ou la mentionne-t-elle ? Lire aussi la règle pour les interdits qu'aucun mot ne désigne | 🔴 → la règle de verrou du dépôt |
+| 6 | **Performance / chargement de données** : N+1, écritures non groupées, `Promise.all` non borné, sur-chargement | **seulement si les règles couvrent la performance** | **Scripté** : motifs de boucle asynchrone et de `Promise.all` ajoutés. À juger : `grep` le batch / loader existant avant d'en exiger un nouveau ; lire la règle pour les motifs propres au dépôt | selon le plancher de la règle (souvent 🟠) |
+| 7 | **Réutiliser plutôt que dupliquer** : une clé de traduction ou de message ajoutée duplique un **terme** (la valeur, pas seulement la clé) déjà présent sous une autre clé | le diff touche des catalogues de traduction ou de messages | **Scripté** : pour chaque clé ajoutée, sa **valeur** (sans casse ni ponctuation finale) cherchée dans tous les catalogues, et les clés définies deux fois dans un objet JSON. À juger : le même usage justifie-t-il de réutiliser la clé ? | 🟠 si la même clé est définie deux fois dans un catalogue (la dernière gagne en silence) · 🟡 si une nouvelle clé duplique un terme existant : proposer de réutiliser l'existante. Même réflexe pour une constante, une valeur d'enum ou un utilitaire qui en répète un autre. |
 
 ## 6. Garde-fous : la CI d'abord
 
@@ -197,19 +205,22 @@ projets affectés. **Ne pas la reproduire en local.** `facts.md` donne son état
 
 - tout `SUCCESS` → `verte` ; premier `FAILURE` / `ERROR` → `rouge sur <job>` ; au moins un
   `PENDING` / `QUEUED` → `en attente`.
-- sur un job rouge, chercher la cause : `gh run view <runId> --log-failed | tail -60`. Cette cause décide
-  s'il existe un constat (étape 8) ; elle ne colore pas le verdict.
+- sur un job rouge, la fin de son log est déjà dans `WORKDIR/ci-<run>.log` (voir `facts.md`). Cette
+  cause décide s'il existe un constat (étape 8) ; elle ne colore pas le verdict.
 
 Ne jamais relancer des checks, ni `gh pr checks --watch`.
 
 **Vérifications locales ciblées.** Elles se découvrent dans les scripts du `package.json` et dans le
 `CLAUDE.md` du dépôt, sans supposer de noms. Avant d'en lancer une, **annoncer son ordre de grandeur de
 coût**, jamais après. Tout ce qui dure **≥ ~10 min**, ou exige un **checkout de la branche**, demande un
-**go explicite** : voir [`references/local-gates.md`](references/local-gates.md).
+**go explicite** : voir [`references/local-gates.md`](references/local-gates.md). C'est `local-gate.sh`
+qui les lance : `status` dit d'abord si le checkout courant mesure bien la PR et liste les scripts du
+`package.json` ; `checkout` et `worktree` exigent `--go`, refusent un arbre sale et **rendent toujours**
+l'état de départ.
 
-> ⚠️ Ces commandes mesurent le **checkout courant**. S'il n'est pas la branche de la PR (étape 4), leur
-> résultat ne dit rien de la PR : ne pas les lancer, et l'écrire dans la fiche plutôt que laisser croire
-> qu'une vérification a eu lieu.
+> ⚠️ Ces commandes mesurent le **checkout courant**. Si `local-gate.sh status` dit qu'il n'est pas la
+> branche de la PR, leur résultat ne dit rien de la PR : ne pas les lancer, et l'écrire dans la fiche
+> plutôt que laisser croire qu'une vérification a eu lieu.
 
 Le champ **Vérifications lancées** se remplit honnêtement : « lecture de code seule » est une réponse
 valide ; affirmer une vérification qui n'a pas eu lieu ne l'est pas.
@@ -254,8 +265,8 @@ sur une PR ordinaire et propre, ça ne produit que du bruit.
   migration de données ;
 - **volume** : au-delà de ~40 fichiers ou ~2500 lignes (même seuil que le fan-out, les deux se cumulent ;
   le second avis ne remplace pas le découpage) ;
-- le diff touche un **fichier déjà brûlé** : `grep` le chemin dans les catalogues de bugs ou de
-  performance du dépôt, s'il en tient (ignoré sinon).
+- le diff touche un **fichier déjà brûlé** : `facts.md` (vérification 0) dit quels fichiers touchés sont
+  cités dans les règles ou les docs du dépôt, dont ses catalogues de bugs ou de performance.
 
 **Critères de doute** (observables, évaluables après l'étape 7) :
 
@@ -271,7 +282,8 @@ sur une PR ordinaire et propre, ça ne produit que du bruit.
 
 **Lancer : proposer et attendre le go**, comme le fan-out. Annoncer le ou les critères déclenchés, puis
 lancer sur accord. Un sous-agent `general-purpose`, en avant-plan (son résultat est nécessaire avant le
-verdict), dont le prompt garantit l'**aveuglement** :
+verdict). **Son prompt vient de `${CLAUDE_SKILL_DIR}/blind-prompt.sh <PR#>`**, ne pas le réécrire : le script
+garantit l'**aveuglement** par construction, et il fixe :
 
 - lui donner **le numéro de PR seul** : jamais tes constats, jamais ton verdict, jamais un axe à
   explorer. Un sous-agent à qui on souffle la réponse la confirme ;
@@ -333,7 +345,9 @@ déclarent pas.
 python3 ${CLAUDE_SKILL_DIR}/render.py <WORKDIR>
 ```
 
-Valide `review.json` (champs, sévérités, `path:line`) et refuse s'il manque quelque chose. Puis
+Valide `review.json` et refuse s'il manque quelque chose : champs, sévérités, **`path:line` qui doit
+exister** (fichier touché lu en version PR, ligne dans ses bornes), et **planchers de sévérité**
+(ci-dessous). Puis
 **calcule le verdict sur le code, jamais sur la CI**, et affiche la fiche, la frontière `---` /
 `## Commentaire à coller sur la PR`, puis le commentaire, écrit aussi dans `WORKDIR/comment.md`.
 Recopier cette sortie telle quelle dans la conversation. **Aucun fichier n'est créé dans le dépôt** :
@@ -355,13 +369,16 @@ Si c'est un défaut de code du diff, il entre comme constat 🔴/🟠 et le verd
 c'est un flaky, de l'infra ou un rouge déjà présent sur la branche par défaut, l'écrire et laisser le
 verdict. Symétriquement, une CI verte ne rachète aucun constat : un 🔴 reste 🔴.
 
-**Planchers** (chacun ne s'applique que si les règles du dépôt le rendent pertinent) :
+**Planchers**, appliqués par `render.py` à partir des champs de `review.json` : il refuse un verdict qui
+les contredit, il ne les corrige pas. Un champ qui rapporte un problème commence par son marqueur
+(`🔴` ou `⚠️`) ou dit `SANS migration` / `NON corrigé` :
 
-- entité ou schéma modifié **sans** migration → 🔴, sans discussion, **seulement** sur un dépôt qui
-  écrit ses migrations ;
-- logique métier ou correctif de bug **sans** test → au moins 🟠 (donc jamais 🟢) ;
-- un jumeau identifié, ni corrigé ni signalé → au moins 🟠 ;
-- draft → le verdict reste indicatif, l'écrire (« PR en draft : verdict indicatif »).
+- entité ou schéma modifié **sans** migration (`migrations`) → au moins un 🔴, sans discussion,
+  **seulement** sur un dépôt qui écrit ses migrations ; un `🔴` dans `locks` ou `tenant` aussi ;
+- logique métier ou correctif de bug **sans** test (`tests` commence par `⚠️`) → au moins un 🟠 (donc
+  jamais 🟢) ;
+- un jumeau identifié, ni corrigé ni signalé (`twins` dit `NON corrigé`) → au moins un 🟠 ;
+- draft → le verdict reste indicatif, l'écrire (« PR en draft : verdict indicatif ») : `render.py` le fait.
 
 Le verdict mesure l'état du diff, **pas** la valeur du travail : le formuler factuellement. Il est
 **consultatif** : il ne pose aucun label et ne bloque rien.
@@ -388,7 +405,7 @@ d'en empiler un second. Pas de PR en mode local : rien à poster, la fiche reste
   correctifs en extraits ; l'application passe par `pr-review-triage` ou par l'implémentation à la main.
 - **Ne relance pas la CI**, pas de `--watch`.
 - **Ne laisse le dépôt dans aucun autre état** qu'au départ : branche d'origine, arbre propre, worktrees
-  retirés.
+  retirés. `local-gate.sh` le garantit ; ne pas faire `gh pr checkout` ou `git worktree add` à la main.
 - **Ne signale rien que tu n'as pas vu.** Pas de remarque déduite du titre ou d'un nom de fichier, ni d'un
   résultat de `grep` non confirmé par la lecture. Une remarque fausse coûte plus cher que pas de
   remarque : elle décrédibilise tout le reste.

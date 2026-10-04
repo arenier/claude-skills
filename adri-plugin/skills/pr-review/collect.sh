@@ -57,6 +57,20 @@ if [[ -n "$PR" ]]; then
   gh pr view "$PR" --json number,title,body,author,state,isDraft,baseRefName,headRefName,headRefOid,additions,deletions,files,commits,statusCheckRollup,labels \
     > "$WORKDIR/pr.json"
   gh pr diff "$PR" > "$WORKDIR/diff.patch"
+  # A red job: its cause decides whether a finding exists, so fetch the failing log tail now.
+  for run in $(python3 - "$WORKDIR/pr.json" <<'PY'
+import json, re, sys
+seen = []
+for c in json.load(open(sys.argv[1])).get("statusCheckRollup") or []:
+    if (c.get("conclusion") or c.get("state") or "").upper() in {"FAILURE", "TIMED_OUT", "ERROR", "STARTUP_FAILURE"}:
+        m = re.search(r"/actions/runs/(\d+)", c.get("detailsUrl") or c.get("targetUrl") or "")
+        if m and m.group(1) not in seen:
+            seen.append(m.group(1))
+print(" ".join(seen[:3]))
+PY
+  ); do
+    gh run view "$run" --log-failed 2>/dev/null | tail -60 > "$WORKDIR/ci-${run}.log" || true
+  done
   BASE_REF="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["baseRefName"])' "$WORKDIR/pr.json")"
   HEAD_SHA="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["headRefOid"])' "$WORKDIR/pr.json")"
 
