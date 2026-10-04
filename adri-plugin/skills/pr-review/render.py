@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Render the review sheet and the PR comment from the reviewer's findings.
 
-    python3 render.py <workdir>
+    python3 render.py <workdir> [--routine [--sha <head sha>]]
+
+With --routine, only the comment is printed, in the layout a routine posts
+(folded sheet, `<!-- pr-review-auto: SHA -->` as the last line).
 
 Reads <workdir>/pr.json and <workdir>/rules.json (from collect.sh) and
 <workdir>/review.json (written by the reviewer), prints the sheet then the ready-to-paste comment, and writes
@@ -18,7 +21,7 @@ from pathlib import Path
 
 sys.dont_write_bytecode = True  # no __pycache__ inside the installed plugin
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from analyze import ci_state, title_check, zone  # noqa: E402
+from analyze import ci_for, title_check, zone  # noqa: E402
 
 SEVERITIES = {
     "blocker": ("🔴", "Bloquants", "Bloquants"),
@@ -127,7 +130,7 @@ def checks_run(review):
     return f"{base} + {local}" if local else f"{base}. **Ni lint, ni test, ni build lancés localement.**"
 
 
-def sheet(pr, review, rules, findings, icon, label):
+def sheet_rows(pr, review, rules, findings, icon, label):
     draft = " (PR en draft : verdict indicatif)" if pr["isDraft"] else ""
     paths = [f["path"] for f in pr.get("files") or []]
     zones = ", ".join(sorted({zone(p) for p in paths}))
@@ -138,7 +141,7 @@ def sheet(pr, review, rules, findings, icon, label):
         ("Périmètre", f"{len(paths)} fichiers · +{pr['additions']}/-{pr['deletions']} lignes · zones : {zones}"),
         ("Contextes touchés", review["contexts"]),
         ("Titre", title_check(pr["title"], rules.get("commitlint"))),
-        ("CI", f"{ci_state(pr.get('statusCheckRollup'))} — read-only, ne colore pas le verdict"),
+        ("CI", f"{ci_for(pr)} — read-only, ne colore pas le verdict"),
         ("Migrations", review["migrations"]),
         ("Tests", review["tests"]),
         ("Verrous de stack", review["locks"]),
@@ -148,8 +151,11 @@ def sheet(pr, review, rules, findings, icon, label):
         ("Vérifications lancées", checks_run(review)),
         ("Second avis à froid", review["second_opinion"]),
     ]
-    out = [sheet_title(pr), "", "| Champ | Valeur |", "|---|---|"]
-    out += ["| **%s** | %s |" % (k, str(v).replace("|", "\\|")) for k, v in rows]
+    return ["| Champ | Valeur |", "|---|---|"] + ["| **%s** | %s |" % (k, str(v).replace("|", "\\|")) for k, v in rows]
+
+
+def sheet(pr, review, rules, findings, icon, label):
+    out = [sheet_title(pr), ""] + sheet_rows(pr, review, rules, findings, icon, label)
     out += ["", "### Constats", ""]
 
     if not findings:
@@ -180,7 +186,7 @@ def sheet(pr, review, rules, findings, icon, label):
 
 
 def comment(pr, review, findings, icon, label):
-    ci = ci_state(pr.get("statusCheckRollup"))
+    ci = ci_for(pr)
     out = [MARKER, f"**Review** · {icon} {label}", "", f"> **Réserves** — {reserves(findings, with_location=False)}", "", review["summary"], ""]
     if pr["isDraft"]:
         out += ["PR en draft : verdict indicatif.", ""]
@@ -211,8 +217,48 @@ def comment(pr, review, findings, icon, label):
     return "\n".join(out) + "\n"
 
 
+def details(summary, lines, open_=False):
+    return [f"<details{' open' if open_ else ''}>", f"<summary><b>{summary}</b></summary>", ""] + lines + ["", "</details>", ""]
+
+
+def comment_routine(pr, review, rules, findings, icon, label, sha):
+    """The layout a routine posts: verdict and reserves unfolded, everything else folded, the marker last.
+
+    One screen unfolded; the whole sheet stays available, folded. The marker
+    `<!-- pr-review-auto: SHA -->` is alone on the last line, outside any <details>:
+    dedup.py reads it to know a SHA was already reviewed.
+    """
+    ci = ci_for(pr)
+    out = [f"**Review** · {icon} {label}", "", f"> **Réserves** — {reserves(findings, with_location=False)}", "", review["summary"], ""]
+    if pr["isDraft"]:
+        out += ["PR en draft : verdict indicatif.", ""]
+    if ci != "verte":
+        out += [f"CI {ci} — hors verdict.", ""]
+    top = [f for f in findings if f["severity"] in ("blocker", "major")]
+    if top:
+        has_blocker = any(f["severity"] == "blocker" for f in top)
+        lines = [f"- {'🔴' if f['severity'] == 'blocker' else '🟠'} **{f['title']}** (`{f['location']}`) — {f['breaks']} → {f['fix']}" for f in top]
+        out += details(f"🔴 Bloquants · 🟠 À corriger ({len(top)})", lines, open_=has_blocker)
+    soft = []
+    for f in findings:
+        if f["severity"] == "minor":
+            soft.append(f"- 🟡 {f['title']} (`{f['location']}`) — {f['fix']}")
+        elif f["severity"] == "question":
+            soft.append(f"- 💬 {f['title']}")
+    soft += [f"- ✍️ {s}" for s in review.get("style") or ["rien à signaler"]]
+    out += details(f"🟡 Suggestions · 💬 Remarques · ✍️ Style & altitude ({len(soft)})", soft)
+    out += details("Fiche de review", sheet_rows(pr, review, rules, findings, icon, label))
+    out.append(f"<!-- pr-review-auto: {sha} -->")
+    return "\n".join(out) + "\n"
+
+
 def main():
-    workdir = Path(sys.argv[1])
+    args = sys.argv[1:]
+    routine = "--routine" in args
+    sha = None
+    if "--sha" in args:
+        sha = args[args.index("--sha") + 1]
+    workdir = Path(args[0])
     pr = json.loads((workdir / "pr.json").read_text())
     review = json.loads((workdir / "review.json").read_text())
     rules_file = workdir / "rules.json"
@@ -229,6 +275,11 @@ def main():
         print(f"attention : {len(findings)} constats, plafond ~10 — agréger le style dans `style`.", file=sys.stderr)
 
     icon, label = verdict(findings)
+    if routine:
+        body = comment_routine(pr, review, rules, findings, icon, label, sha or pr["headRefOid"])
+        (workdir / "comment.md").write_text(body)
+        print(body, end="")
+        return
     body = comment(pr, review, findings, icon, label)
     (workdir / "comment.md").write_text(body)
 

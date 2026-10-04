@@ -111,6 +111,13 @@ def ci_state(rollup):
     return "en attente" if pending else "verte"
 
 
+def ci_for(pr):
+    """The CI field of the sheet, honest about a state that could not be read."""
+    if pr.get("ciError"):
+        return f"non lisible ({pr['ciError'][:120]})"
+    return ci_state(pr.get("statusCheckRollup"))
+
+
 def title_check(title, commitlint):
     """Shape only. The type and scope enums are the repo's own (its commitlint config)."""
     shape = "forme `type(scope): sujet` respectée" if TITLE_SHAPE.match(title) else "⚠️ forme `type(scope): sujet` non respectée"
@@ -181,7 +188,7 @@ def main():
     w(f"- {title_check(pr['title'], meta.get('commitlint'))}")
 
     w("\n## CI (read-only, ne colore pas le verdict)\n")
-    w(f"- {ci_state(pr.get('statusCheckRollup'))}")
+    w(f"- {ci_for(pr)}")
     for log in sorted(workdir.glob("ci-*.log")):
         w(f"- cause du job rouge : fin du log dans `{log}` (60 dernières lignes) — à lire pour décider s'il existe un constat")
 

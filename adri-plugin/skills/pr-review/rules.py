@@ -20,9 +20,12 @@ frontmatter globs match a touched path applies to that path; a rule without
 """
 import json
 import re
-import subprocess
 import sys
 from pathlib import Path
+
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from ghapi import GitHubError, api  # noqa: E402
 
 INDEXES = ["CLAUDE.md", "AGENTS.md", ".github/copilot-instructions.md"]
 RULE_GLOBS = [r"^\.claude/rules/.+\.md$", r"^\.github/instructions/.+\.md$"]
@@ -32,9 +35,11 @@ MAX_DOCS = 80
 
 
 def gh_api(endpoint, raw=False):
-    cmd = ["gh", "api"] + (["-H", "Accept: application/vnd.github.raw"] if raw else []) + [endpoint]
-    r = subprocess.run(cmd, capture_output=True, text=True)
-    return r.stdout if r.returncode == 0 else None
+    """None on any failure: a missing rule file is not an error, the sheet says what was found."""
+    try:
+        return api(endpoint, raw=True) if raw else json.dumps(api(endpoint))
+    except GitHubError:
+        return None
 
 
 def tree(base_ref):

@@ -83,7 +83,10 @@ ${CLAUDE_SKILL_DIR}/collect.sh [PR#]
 - **Mode PR** (un numéro) : relit cette PR. **Mode local** (rien) : relit la branche courante contre la
   branche par défaut, résolue par `gh` (jamais supposée `main` ou `master`) ; refusé sur la branche par
   défaut elle-même. Aucun mode n'exige un arbre propre : tout est en lecture.
-- Le dépôt cible est résolu par `gh` depuis le remote courant, jamais écrit en dur.
+- Le dépôt cible est résolu depuis `CCR_TRIGGER_REPO`, sinon le remote courant, sinon `gh`, jamais écrit
+  en dur. Tous les appels GitHub passent par `ghapi.py` : **`gh` quand il est là, sinon l'API REST avec
+  le token ambiant** (`GITHUB_TOKEN` / `GH_TOKEN`). Les scripts tournent donc à l'identique sur un poste
+  de développeur et dans une routine cloud, qui n'a pas `gh`.
 - Les **règles** sont lues sur la **branche de base** de la PR, jamais sur la branche relue : son auteur
   pourrait sinon réécrire ce qui le juge. Le script copie sous `WORKDIR/rules/` les `.claude/rules/**`,
   les `.github/instructions/**`, `CLAUDE.md` / `AGENTS.md`, les docs que ces fichiers désignent (ADR,
@@ -110,6 +113,25 @@ affiche :
 Sans règle écrite sur la base, `facts.md` le dit : le dire aussi dans la fiche, et relire sur la seule
 base de l'intention, du titre et des catégories génériques qui restent valables (couverture de test,
 jumeaux par bon sens).
+
+### Dans une routine cloud
+
+Une routine n'a pas `gh` et relit sans humain. Les mêmes scripts y tournent, avec trois ajouts, tous
+scriptés (le prompt de la routine, qui vit dans le dépôt relu, ne fait que les enchaîner) :
+
+```bash
+python3 ${CLAUDE_SKILL_DIR}/dedup.py <PR#>                       # REVIEW <mode> (exit 0) ou SKIP <raison> (exit 10)
+${CLAUDE_SKILL_DIR}/collect.sh <PR#> [--ci-file ci.json]         # --ci-file : la CI lue par un autre canal
+python3 ${CLAUDE_SKILL_DIR}/render.py <WORKDIR> --routine        # commentaire plié, marqueur de SHA en dernière ligne
+python3 ${CLAUDE_SKILL_DIR}/post-auto.py <PR#> <WORKDIR>         # re-vérifie la dédup, poste sous l'identité du token
+```
+
+- `dedup.py` applique la déduplication par SHA du marqueur `<!-- pr-review-auto: SHA -->` : sans label
+  `claude`, une review par SHA ; avec le label (une demande explicite), une nouvelle review au-delà de
+  10 minutes, la fenêtre ne servant qu'à écarter les livraisons concurrentes d'un même événement.
+- `post-auto.py` **exige** le token ambiant et ne retombe jamais sur `gh` : la review doit être
+  identifiable comme automatique. Il refuse un commentaire dont le marqueur n'est pas au SHA relu, ou
+  une PR qui a avancé depuis. Il ne poste qu'un commentaire : ni review, ni merge, ni label.
 
 ## 2. Établir l'intention
 
