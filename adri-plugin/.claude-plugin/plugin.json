@@ -1,7 +1,7 @@
 {
   "name": "adri-plugin",
   "description": "Cycle de vie d'une pull request : ouvrir (create-pr), relire (pr-review), traiter la review (pr-review-triage).",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "arenier",
     "url": "https://github.com/arenier"

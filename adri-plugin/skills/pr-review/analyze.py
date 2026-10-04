@@ -4,8 +4,15 @@
     python3 analyze.py <workdir>
 
 Everything here is deterministic: stop conditions, size thresholds, title
-form, CI state, the path -> ADR routing table, and grep-level hits for the
-off-diff checks. Deciding whether a hit is a finding is left to the reviewer.
+form, CI state, and the profile-driven lookups. Deciding whether a hit is a
+finding is left to the reviewer.
+
+Nothing in this file knows a repository. What is specific to one (which
+decisions govern which paths, which APIs are ruled out, which extra checks to
+run) comes from the repo's own profile, `.claude/pr-review.json`, which
+collect.sh copies to <workdir>/profile.json from the PR's base branch. Without
+a profile the skill still works, on the generic checks only. See
+`PROFILE.md` for the format.
 """
 import json
 import re
@@ -16,34 +23,14 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 CONVENTIONAL = HERE / "../../scripts/conventional.sh"
 
-# Path pattern -> ADRs that govern it. Order matters only for display.
-ROUTES = [
-    (r"^libs/shared/", "0002 (lib partagée : n'importe aucun contexte, pas de common/utils)"),
-    (r"^libs/[^/]+/domain/", "0002 (domain : ne dépend de rien, value objects)"),
-    (r"^libs/[^/]+/application/", "0002 (dépend du domain seul, parle aux ports) · 0003 (pas d'event bus)"),
-    (r"^libs/[^/]+/infrastructure/", "0002 (personne n'en dépend hors composition root) · 0006 (SQL, schéma, migrations ici)"),
-    (r"^apps/api/", "0003 (seul module multi-contextes, DTO de frontière, aucune règle métier)"),
-    (r"^apps/web/", "0002 (feature-slice : pas d'import dans une autre slice)"),
-    (r"(?i)(vlm|shelf-?scanner)", "0005 (derrière ShelfScannerPort, tests sur réponses enregistrées)"),
-    (r"(^|/)(package\.json|yarn\.lock|\.yarnrc\.yml|\.nvmrc|\.node-version)$", "0001 (Yarn 4, pins exacts, nodeLinker node-modules)"),
-    (r"(^|/)(vite|vitest)\.config\.", "0007 (Vite/Vitest, SWC pour apps/api)"),
-    (r"(^|/)(docker-compose[^/]*\.ya?ml|Dockerfile)$|(^|/)deploy[^/]*$", "0004 (Cloud Run + bucket) · 0006 (Postgres managé, pas de gcsfuse/SQLite)"),
-]
-
-# Signatures of APIs the ADRs rule out, looked for in added lines.
-LOCKED = [
-    (r"@nestjs/cqrs|@nestjs/event-emitter|\bEventEmitter\b", "event bus -> ADR 0003"),
-    (r"\bjest\b|@jest/", "Jest -> ADR 0007"),
-    (r"\bwebpack\b", "webpack -> ADR 0007"),
-    (r"nodeLinker:\s*pnp|\bpnp\b", "PnP -> ADR 0001"),
-    (r"yarn@1\.|\"yarn\":\s*\"1\.", "Yarn Classic -> ADR 0001"),
-    (r"(?i)gcsfuse|sqlite", "gcsfuse / SQLite comme base -> ADR 0006"),
-]
-VERSION_RANGE = re.compile(r'"[^"]+"\s*:\s*"[\^~><*]')
-IMPORT = re.compile(r"""^\s*(?:import\b.*?from\s*|import\s*|export\b.*?from\s*)['"]([^'"]+)['"]|require\(\s*['"]([^'"]+)['"]\s*\)""")
-AS_CAST = re.compile(r"\bas\s+(?!const\b)[\w{\[(<]")
+# Generic: how to tell a test file, and a source file, in the usual ecosystems.
+DEFAULT_TESTS = {
+    "source": r"\.(?:[jt]sx?|py|go|rs|rb|java|kt|php|cs)$",
+    "test": r"(?:[._]|^|/)(?:spec|test)s?[._/]|(?:^|/)(?:tests?|__tests__)/|_test\.go$",
+}
 FAILING = {"FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "ERROR"}
 PENDING = {"PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED"}
+IMPORT = re.compile(r"""^\s*(?:import\b.*?from\s*|import\s*|export\b.*?from\s*|from\s+\S+\s+import\b)['"]?([^'"\s]+)['"]?|require\(\s*['"]([^'"]+)['"]\s*\)""")
 
 
 def added_lines(patch):
@@ -64,8 +51,9 @@ def added_lines(patch):
 
 
 def zone(path):
+    """Top-level area of a path: `dir/sub` under apps/ and libs/ style roots, else `dir`."""
     parts = path.split("/")
-    if parts[0] in ("apps", "libs") and len(parts) > 1:
+    if len(parts) > 2 and parts[0] in ("apps", "libs", "packages", "services", "plugins"):
         return f"{parts[0]}/{parts[1]}"
     return parts[0] if len(parts) > 1 else "racine"
 
@@ -94,10 +82,19 @@ def title_check(title):
     return "⚠️ non conforme : " + " · ".join(r.stdout.split("\n")).strip(" ·")
 
 
+def tracked_files():
+    r = subprocess.run(["git", "ls-files"], capture_output=True, text=True)
+    return r.stdout.splitlines() if r.returncode == 0 else []
+
+
 def main():
     workdir = Path(sys.argv[1])
     pr = json.loads((workdir / "pr.json").read_text())
     patch = (workdir / "diff.patch").read_text()
+    profile_file = workdir / "profile.json"
+    profile = json.loads(profile_file.read_text()) if profile_file.exists() else {}
+    default_branch = (workdir / "default_branch").read_text().strip() if (workdir / "default_branch").exists() else "main"
+
     files = pr.get("files") or []
     paths = [f["path"] for f in files]
     size = pr["additions"] + pr["deletions"]
@@ -118,8 +115,11 @@ def main():
     notes = []
     if pr["isDraft"]:
         notes.append("Draft : verdict indicatif.")
-    if pr["baseRefName"] != "main":
-        notes.append(f"Base `{pr['baseRefName']}` ≠ main : PR empilée, le diff peut inclure la PR parente.")
+    if pr["baseRefName"] != default_branch:
+        notes.append(f"Base `{pr['baseRefName']}` ≠ `{default_branch}` : PR empilée, le diff peut inclure la PR parente.")
+    if not profile:
+        notes.append("Aucun profil `.claude/pr-review.json` sur la base : seules les vérifications génériques s'appliquent. "
+                     "Les conventions du dépôt se découvrent à la lecture (étape 3).")
     for line in stops + notes or ["Aucun."]:
         w(f"- {line}")
 
@@ -129,7 +129,8 @@ def main():
     w("- Lecture : " + ("fichier par fichier (> 2000 lignes)" if size > 2000 else "d'un bloc"))
     fan_out = len(paths) > 40 or size > 2500
     w(f"- Fan-out : {'à PROPOSER (> 40 fichiers ou > 2500 lignes), attendre le go' if fan_out else 'non (relecture inline)'}")
-    stakes = [p for p in paths if re.search(r"(?i)vlm|shelf-?scanner|/infrastructure/|migration|schema|postgres", p)]
+    stakes_re = profile.get("stakes")
+    stakes = [p for p in paths if stakes_re and re.search(stakes_re, p)]
     reasons = []
     if stakes:
         reasons.append(f"touche {', '.join(f'`{p}`' for p in stakes[:5])}{' …' if len(stakes) > 5 else ''}")
@@ -137,84 +138,118 @@ def main():
         reasons.append(f"{size} lignes (> 300)")
     w(f"- Second avis, critère d'enjeu : {'rempli — ' + ' ; '.join(reasons) if reasons else 'non rempli'} (le critère de doute reste à juger)")
 
+    if profile.get("notes"):
+        w("\n## Notes du dépôt\n")
+        w(profile["notes"])
+
     w("\n## Titre Conventional Commits\n")
     w(f"- {title_check(pr['title'])}")
 
     w("\n## CI (read-only, ne colore pas le verdict)\n")
     w(f"- {ci_state(pr.get('statusCheckRollup'))}")
 
-    w("\n## Routage ADR\n")
-    w("Toujours : `CLAUDE.md`.\n")
-    w("| Fichier | À confronter |\n|---|---|")
-    adrs = set()
-    for p in paths:
-        hits = [label for pattern, label in ROUTES if re.search(pattern, p)]
-        adrs.update(re.findall(r"\b000\d\b", " ".join(hits)))
-        w(f"| `{p}` | {' · '.join(hits) if hits else '—'} |")
-    for f in files:
-        p = f["path"]
-        if re.match(r"^(apps|libs)/.+/package\.json$", p):
-            head = workdir / "head" / p
-            tagged = head.exists() and '"tags"' in head.read_text()
-            if not tagged:
-                w(f"\n⚠️ `{p}` : pas de `nx.tags` trouvés — un projet sans tags échappe aux frontières.")
-    w(f"\nADR à lire : {', '.join(sorted(adrs)) or 'aucun routé (lire CLAUDE.md)'}")
+    w("\n## Décisions à confronter\n")
+    index = profile.get("index") or ["CLAUDE.md", "AGENTS.md"]
+    w(f"Toujours, s'ils existent : {', '.join(f'`{i}`' for i in index)}.")
+    if profile.get("decisions"):
+        w(f"Décisions actées : `{profile['decisions']}/`.")
+    if profile.get("rules"):
+        w(f"Rules : `{profile['rules']}/` — une rule dont le frontmatter `paths` cible un fichier du diff s'applique à ce fichier.")
+    routes = profile.get("routes") or []
+    if routes:
+        w("\n| Fichier | À confronter |\n|---|---|")
+        refs = set()
+        for p in paths:
+            hits = [r for r in routes if re.search(r["paths"], p)]
+            for r in hits:
+                refs.update(r.get("refs") or [])
+            w(f"| `{p}` | {' · '.join(r['read'] for r in hits) if hits else '—'} |")
+        w(f"\nÀ lire : {', '.join(sorted(refs)) or 'aucun routé'}")
+    else:
+        w("\nPas de routage chemin → décision : lire l'index puis chercher les décisions qui concernent les zones touchées.")
+
+    for req in profile.get("required", []):
+        for f in files:
+            p = f["path"]
+            if re.search(req["paths"], p):
+                head = workdir / "head" / p
+                if not (head.exists() and req["contains"] in head.read_text()):
+                    w(f"\n⚠️ `{p}` : {req['label']}")
 
     w("\n## Vérifications hors-diff (résultats bruts, à juger)\n")
+    n = 0
 
-    w("### 1. Imports ajoutés dans domain / application\n")
-    hits = []
-    for p, n, text in added:
-        if re.match(r"^libs/[^/]+/(domain|application)/", p):
-            m = IMPORT.search(text)
-            if m:
-                hits.append(f"- `{p}:{n}` → `{m.group(1) or m.group(2)}`")
-    w("\n".join(hits) or "rien")
+    zones_re = profile.get("import_zones")
+    if zones_re:
+        n += 1
+        w(f"### {n}. Imports ajoutés dans les zones contraintes\n")
+        hits = []
+        for p, ln, text in added:
+            if re.search(zones_re, p):
+                m = IMPORT.search(text)
+                if m:
+                    hits.append(f"- `{p}:{ln}` → `{m.group(1) or m.group(2)}`")
+        w("\n".join(hits) or "rien")
+        w("")
 
-    w("\n### 2. Jumeaux\n")
-    w("jugement : chercher la signature du défaut corrigé dans tout le repo (`grep -rn`).")
+    n += 1
+    w(f"### {n}. Jumeaux\n")
+    w("jugement : chercher la signature du défaut corrigé dans tout le repo (`grep -rn`).\n")
 
-    w("\n### 3. Specs des fichiers source touchés\n")
-    specs = {p for p in paths if re.search(r"\.(spec|test)\.[jt]sx?$", p)}
+    n += 1
+    w(f"### {n}. Tests des fichiers source touchés\n")
+    tests = {**DEFAULT_TESTS, **(profile.get("tests") or {})}
+    test_files = {p for p in paths if re.search(tests["test"], p)}
+    local = [t for t in tracked_files() if re.search(tests["test"], t)]
     rows = []
     for p in paths:
-        if not re.search(r"\.[jt]sx?$", p) or p in specs:
+        if not re.search(tests["source"], p) or p in test_files:
             continue
-        stem = re.sub(r"\.[jt]sx?$", "", p)
-        touched = any(s.startswith(stem + ".") for s in specs)
-        local = any(Path(stem + ext).exists() for ext in (".spec.ts", ".spec.tsx", ".test.ts", ".test.tsx"))
-        rows.append(f"- `{p}` — spec touchée : {'oui' if touched else 'non'} · spec existante (checkout local) : {'oui' if local else 'non'}")
+        base = Path(p).name.split(".")[0]
+        touched = any(base in Path(t).name for t in test_files)
+        existing = any(base in Path(t).name for t in local)
+        rows.append(f"- `{p}` — test touché : {'oui' if touched else 'non'} · test existant (checkout local) : {'oui' if existing else 'non'}")
     w("\n".join(rows) or "aucun fichier source touché")
+    w("")
 
-    w("\n### 4. Schéma / entité ↔ migration\n")
-    schema = [p for p in paths if "/infrastructure/" in p and re.search(r"(?i)entit|schema|table|model", p) and "migration" not in p.lower()]
-    migrations = [p for p in paths if "migration" in p.lower()]
-    w(f"- Entités / schéma touchés : {', '.join(f'`{p}`' for p in schema) or 'aucun'}")
-    w(f"- Migrations touchées : {', '.join(f'`{p}`' for p in migrations) or 'aucune'}")
-    if schema and not migrations:
-        w("- ⚠️ schéma touché SANS migration dans le diff → 🔴 si confirmé (ADR 0006)")
+    locked = profile.get("locked") or []
+    if locked:
+        n += 1
+        w(f"### {n}. Interdits du dépôt (lignes ajoutées)\n")
+        hits = []
+        for p, ln, text in added:
+            for rule in locked:
+                if rule.get("paths") and not re.search(rule["paths"], p):
+                    continue
+                if rule.get("ignore") and re.search(rule["ignore"], text.strip()):
+                    continue
+                if re.search(rule["pattern"], text):
+                    hits.append(f"- `{p}:{ln}` — {rule['label']} — `{text.strip()[:100]}`")
+        w("\n".join(hits) or "rien")
+        w("")
 
-    w("\n### 5. APIs verrouillées (lignes ajoutées)\n")
-    hits = []
-    for p, n, text in added:
-        for pattern, label in LOCKED:
-            if re.search(pattern, text):
-                hits.append(f"- `{p}:{n}` — {label} — `{text.strip()[:100]}`")
-        if p.endswith("package.json") and VERSION_RANGE.search(text):
-            hits.append(f"- `{p}:{n}` — plage de version -> ADR 0001 — `{text.strip()[:100]}`")
-    w("\n".join(hits) or "rien")
+    for pair in profile.get("companions", []):
+        n += 1
+        w(f"### {n}. {pair['label']}\n")
+        changed = [p for p in paths if re.search(pair["changed"], p) and not (pair.get("except") and re.search(pair["except"], p))]
+        companions = [p for p in paths if re.search(pair["companion"], p)]
+        w(f"- Touchés : {', '.join(f'`{p}`' for p in changed) or 'aucun'}")
+        w(f"- Accompagnement : {', '.join(f'`{p}`' for p in companions) or 'aucun'}")
+        if changed and not companions:
+            w(f"- ⚠️ {pair['warning']}")
+        if pair.get("judge"):
+            w(f"\njugement : {pair['judge']}")
+        if pair.get("if_confirmed"):
+            w(f"Si confirmé : {pair['if_confirmed']}")
+        w("")
 
-    w("\n### 6. Assertions `as` (lignes ajoutées, hors `as const`)\n")
-    hits = []
-    for p, n, text in added:
-        if not re.search(r"\.tsx?$", p):
-            continue
-        stripped = text.strip()
-        if re.match(r"^(import|export)\b|^(//|\*|/\*)", stripped):
-            continue
-        if AS_CAST.search(stripped):
-            hits.append(f"- `{p}:{n}` — `{stripped[:100]}`")
-    w("\n".join(hits) or "rien")
+    for check in profile.get("checks", []):
+        n += 1
+        w(f"### {n}. {check['label']}\n")
+        w(f"jugement : {check['judge']}")
+        if check.get("if_confirmed"):
+            w(f"Si confirmé : {check['if_confirmed']}")
+        w("")
 
     print("\n".join(out))
 
